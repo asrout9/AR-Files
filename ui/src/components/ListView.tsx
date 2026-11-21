@@ -13,6 +13,7 @@ import {
 import { useExplorerStore } from "../store/useExplorerStore";
 import { EntryRecord } from "../types";
 import { StateIcon } from "./StateIcon";
+import { formatLocalizedDate, formatLocalizedFileSize } from "../i18n";
 
 interface ListViewProps {
   onContextMenu: (e: React.MouseEvent, entry: EntryRecord) => void;
@@ -29,6 +30,8 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
     hydrateItem,
     sortBy,
     setSort,
+    language,
+    trashSelected,
   } = useExplorerStore();
 
   const parentRef = useRef<HTMLDivElement>(null);
@@ -38,25 +41,37 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
     getScrollElement: () => parentRef.current,
     estimateSize: () => 40,
     overscan: 15,
+    initialRect: { width: 1000, height: 800 },
   });
 
   const formatSize = (bytes: number, isDir: boolean) => {
     if (isDir) return "--";
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+    return formatLocalizedFileSize(bytes, language);
   };
 
   const formatDate = (mtime: number) => {
-    const d = new Date(mtime);
-    return d.toLocaleDateString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    return formatLocalizedDate(mtime, language);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent, index: number, entry: EntryRecord) => {
+    if (e.key === "Enter") {
+      handleDoubleClick(entry);
+    } else if (e.key === " ") {
+      e.preventDefault();
+      toggleSelect(entry.id, true);
+    } else if (e.key === "ArrowDown" && index < entries.length - 1) {
+      e.preventDefault();
+      const next = entries[index + 1];
+      toggleSelect(next.id, false);
+    } else if (e.key === "ArrowUp" && index > 0) {
+      e.preventDefault();
+      const prev = entries[index - 1];
+      toggleSelect(prev.id, false);
+    } else if (e.key === "Delete" || e.key === "Backspace") {
+      if (selectedIds.size > 0) {
+        trashSelected();
+      }
+    }
   };
 
   const getFileIcon = (entry: EntryRecord) => {
@@ -90,8 +105,10 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%" }}>
       {/* Table Header with Sorting */}
-      <div className="adw-table-header">
+      <div className="adw-table-header" role="row">
         <div
+          role="columnheader"
+          aria-sort={sortBy === "name" ? "ascending" : "none"}
           style={{ flex: 4, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}
           onClick={() => setSort("name")}
         >
@@ -99,6 +116,8 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
           {sortBy === "name" && <ArrowUpDown size={12} />}
         </div>
         <div
+          role="columnheader"
+          aria-sort={sortBy === "size" ? "ascending" : "none"}
           style={{ flex: 1.5, textAlign: "right", display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6, cursor: "pointer" }}
           onClick={() => setSort("size")}
         >
@@ -106,18 +125,22 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
           {sortBy === "size" && <ArrowUpDown size={12} />}
         </div>
         <div
+          role="columnheader"
+          aria-sort={sortBy === "modified" ? "ascending" : "none"}
           style={{ flex: 2, textAlign: "right", display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6, cursor: "pointer" }}
           onClick={() => setSort("modified")}
         >
           <span>Modified</span>
           {sortBy === "modified" && <ArrowUpDown size={12} />}
         </div>
-        <div style={{ width: 60, textAlign: "center" }}>Status</div>
+        <div role="columnheader" style={{ width: 60, textAlign: "center" }}>Status</div>
       </div>
 
       {/* Virtualized Rows Container */}
       <div
         ref={parentRef}
+        role="grid"
+        aria-label="Files and folders list"
         onClick={(e) => {
           if (e.target === e.currentTarget) clearSelection();
         }}
@@ -142,6 +165,10 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
             return (
               <div
                 key={entry.id}
+                role="row"
+                tabIndex={0}
+                aria-selected={isSelected}
+                aria-label={`${entry.name}, ${entry.is_directory ? "directory" : formatSize(entry.size, false)}`}
                 className={`adw-table-row ${isSelected ? "selected" : ""}`}
                 style={{
                   position: "absolute",
@@ -155,13 +182,14 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
                   toggleSelect(entry.id, e.ctrlKey || e.metaKey, e.shiftKey)
                 }
                 onDoubleClick={() => handleDoubleClick(entry)}
+                onKeyDown={(e) => handleKeyDown(e, virtualRow.index, entry)}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   onContextMenu(e, entry);
                 }}
               >
                 {/* Name & Icon Column */}
-                <div style={{ flex: 4, display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                <div role="gridcell" style={{ flex: 4, display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
                   <div style={{ position: "relative", display: "inline-flex" }}>
                     {getFileIcon(entry)}
                     <StateIcon state={entry.state} size={11} />
@@ -180,6 +208,7 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
 
                 {/* Size Column */}
                 <div
+                  role="gridcell"
                   className="tabular-nums"
                   style={{ flex: 1.5, textAlign: "right", color: "var(--dim-fg)" }}
                 >
@@ -188,6 +217,7 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
 
                 {/* Modified Column */}
                 <div
+                  role="gridcell"
                   className="tabular-nums"
                   style={{ flex: 2, textAlign: "right", color: "var(--dim-fg)", fontSize: 13 }}
                 >
@@ -195,7 +225,7 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
                 </div>
 
                 {/* Status Column */}
-                <div style={{ width: 60, display: "flex", justifyContent: "center" }}>
+                <div role="gridcell" style={{ width: 60, display: "flex", justifyContent: "center" }}>
                   <StateIcon state={entry.state} size={15} />
                 </div>
               </div>

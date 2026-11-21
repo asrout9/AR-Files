@@ -125,6 +125,8 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 
       {/* Menu Card */}
       <div
+        role="menu"
+        aria-label="File context menu"
         style={{
           position: "fixed",
           top: y,
@@ -143,6 +145,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         {/* Cloud Hydration / Pin / Evict Actions */}
         {(entry.state === "cloud_only" || entry.state === "error") && (
           <button
+            role="menuitem"
             className="adw-sidebar-item"
             style={{
               borderRadius: 0,
@@ -159,6 +162,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 
         {entry.state === "hydrating" && (
           <button
+            role="menuitem"
             className="adw-sidebar-item"
             style={{
               borderRadius: 0,

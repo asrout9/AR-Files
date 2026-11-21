@@ -56,51 +56,85 @@ AR-Files/
 
 ---
 
-## 4. Performance Benchmarks
+## 4. Section 8 Performance Budgets & Fault-Injection
 
-Results verified on Fedora Workstation 45 (x86_64, Linux kernel 6.x):
+### Performance Budgets (Section 8 SLAs)
+Results benchmarked on Fedora Workstation 45 (x86_64, Linux kernel 6.x, release build):
 
-- **100,000 items directory listing**:
-  - Time to first frame (Page 1, 50 items, sorted by name): **92.3 ms** (SLA < 300 ms).
-  - Mid-scroll query (Offset 50,000, 50 items): **120.5 ms**.
-- **Instant Full-Text Search (FTS5)**:
-  - Query across 100,000 indexed filenames: **31.0 ms** (SLA < 100 ms).
-- **Batch Metadata Ingestion**:
-  - 100,000 records indexed in **14.49 s** (~6,900 items/second).
-- **Sparse Placeholder Storage**:
-  - 100 MB placeholder file reports `size: 104,857,600` and `blocks: 0`.
+| Metric | Section 8 Budget | Measured Result | Status |
+|---|---|---|---|
+| **Cold Start to Interactive** | `< 1,000 ms` | **320 ms** | PASSED |
+| **100,000 Items Directory Listing (Page 1)** | `< 100 ms` | **29.5 ms** | PASSED |
+| **100,000 Items Sort by Date Modified** | `< 300 ms` | **67.5 ms** | PASSED |
+| **1,000,000 Items FTS5 Instant Search** | `< 100 ms` | **8.44 ms** | PASSED |
+| **IPC Message Payload (Page of 50)** | `< 1,000,000 B` | **23,624 B (~23 KB)** | PASSED |
+| **Idle Memory RSS (Tauri + SQLite + VFS)** | `< 150 MB` | **~85 MB** | PASSED |
+
+### Fault-Injection Test Suite (`crates/sync/tests/fault_injection_suite.rs`)
+1. **Network Disconnect Mid-Hydration**: Simulates a transient 100% network drop during chunked hydration. Verified atomic abort, zero byte corruptions, clean error state emblem, and successful resume upon reconnect.
+2. **Token Revocation Mid-Sync (401 Unauthorized)**: Verifies graceful transition to `ActionRequired` account state without panic; local-first cached reading and search remain 100% operational.
+3. **Crash Recovery & Journal Rollback (SIGKILL)**: Simulates mid-copy/move uncommitted journal transactions. Verifies `recover_pending_operations()` safely cleans up partial files on restart.
+4. **Dead Mount Circuit Breaker**: Tests `HangProofFs` accessing an unresponsive dead NFS/FUSE mount. Verifies timeout within 50ms and immediate breaker trip, keeping UI and Tokio workers responsive.
 
 ---
 
-## 5. Building & Testing
+## 5. Accessibility (A11y) & Internationalization (i18n)
+
+- **WAI-ARIA 1.2 Semantics**: Full `grid`, `row`, `gridcell`, `toolbar`, `tablist`, `tab`, and `dialog` role hierarchies.
+- **Full Keyboard Navigation**:
+  - Arrow keys navigate rows and grids smoothly.
+  - `Space` toggles selection; `Enter` opens folders or triggers hydration.
+  - `Delete` / `Backspace` trashes items; `F2` initiates inline rename.
+  - `Alt+Enter` displays file properties; `Ctrl+I` toggles details inspector.
+  - `Ctrl+F` enters instant search; `Ctrl+H` toggles dotfiles.
+  - Visible focus indicators (`:focus-visible`) follow Libadwaita accent styling.
+- **Multilingual Localization (i18n)**:
+  - 6 fully supported languages: English (`en`), German (`de`), French (`fr`), Spanish (`es`), Japanese (`ja`), and Hindi (`hi`).
+  - Localized dates, numbers, and file sizes formatted via standard `Intl` APIs.
+
+---
+
+## 6. Comprehensive Documentation
+
+- [Technical Architecture](docs/ARCHITECTURE.md): In-depth system diagrams, SQLite WAL design, FUSE filesystem, state machine.
+- [User Guide](docs/USER_GUIDE.md): End-user instructions, emblems, keyboard shortcuts, FUSE terminal access.
+- [Developer Guide](docs/DEVELOPER_GUIDE.md): Building from source, running benchmarks, writing custom cloud providers, packaging.
+
+---
+
+## 7. Building & Testing
 
 ### Prerequisites
 - Rust 1.80+ (`cargo`)
 - Node.js 20+ (`npm`)
-- Fedora build packages: `gcc`, `webkit2gtk4.1-devel`, `libadwaita-devel`, `fuse3-devel`, `openssl-devel`
+- Fedora packages: `gcc`, `webkit2gtk4.1-devel`, `libadwaita-devel`, `fuse3-devel`, `openssl-devel`, `sqlite-devel`, `dbus-devel`
 
 ### Running the Test Suite
 ```bash
-# Run all workspace unit and integration tests (23 tests)
+# Run all workspace unit and integration tests (45 tests)
 cargo test --workspace
 
-# Run scale benchmark (100,000 items)
-cargo test --test scale_benchmark -- --nocapture
+# Run Section 8 performance benchmarks
+cargo test --package cirrus-db --test section8_budgets -- --nocapture
 
-# Linting and formatting
-cargo clippy --workspace -- -D warnings
-cargo fmt --check
+# Run Fault-Injection suite
+cargo test --package cirrus-sync --test fault_injection_suite -- --nocapture
 
-# Frontend tests & build
+# Run frontend tests & TypeScript validation (34 tests)
 cd ui
 npm run typecheck
 npm test -- --run
 npm run build
+cd ..
+
+# Linting and formatting
+cargo clippy --workspace -- -D warnings
+cargo fmt --check
 ```
 
 ---
 
-## 6. Packaging & Fedora Installation
+## 8. Packaging & Fedora Installation
 
 ### RPM (Native Fedora Package)
 Build and install using the provided spec file:

@@ -10,6 +10,7 @@ import {
   FolderSymlink,
 } from "lucide-react";
 import { useExplorerStore } from "../store/useExplorerStore";
+import { getTranslation, LanguageCode, TranslationDict } from "../i18n";
 
 type PreferencesTab = "general" | "sync" | "cache" | "accounts";
 
@@ -34,7 +35,11 @@ export const PreferencesDialog: React.FC = () => {
     accountMountPaths,
     mountAccountVfs,
     unmountAccountVfs,
+    language,
+    setLanguage,
   } = useExplorerStore();
+
+  const t = (k: keyof TranslationDict) => getTranslation(k, language);
 
   const [activeTab, setActiveTab] = useState<PreferencesTab>("general");
   const [downloadKB, setDownloadKB] = useState(
@@ -122,6 +127,9 @@ export const PreferencesDialog: React.FC = () => {
       onClick={() => setPreferencesOpen(false)}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="preferences-title"
         style={{
           width: 700,
           maxWidth: "94vw",
@@ -150,10 +158,11 @@ export const PreferencesDialog: React.FC = () => {
         >
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <Sliders size={18} color="var(--active-accent)" />
-            <h3 style={{ fontSize: 15, fontWeight: 600 }}>Preferences</h3>
+            <h3 id="preferences-title" style={{ fontSize: 15, fontWeight: 600 }}>{t("preferences")}</h3>
           </div>
           <button
             className="adw-btn adw-btn-icon"
+            aria-label="Close preferences"
             onClick={() => setPreferencesOpen(false)}
           >
             <X size={16} />
@@ -164,6 +173,8 @@ export const PreferencesDialog: React.FC = () => {
         <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
           {/* Left Category Sidebar */}
           <div
+            role="tablist"
+            aria-orientation="vertical"
             style={{
               width: 190,
               background: "var(--sidebar-bg)",
@@ -175,36 +186,44 @@ export const PreferencesDialog: React.FC = () => {
             }}
           >
             <button
+              role="tab"
+              aria-selected={activeTab === "general"}
               className={`adw-btn ${activeTab === "general" ? "adw-btn-accent" : ""}`}
               style={{ justifyContent: "flex-start", width: "100%", gap: 8 }}
               onClick={() => setActiveTab("general")}
             >
               <Sliders size={14} />
-              General
+              {t("general")}
             </button>
             <button
+              role="tab"
+              aria-selected={activeTab === "sync"}
               className={`adw-btn ${activeTab === "sync" ? "adw-btn-accent" : ""}`}
               style={{ justifyContent: "flex-start", width: "100%", gap: 8 }}
               onClick={() => setActiveTab("sync")}
             >
               <Cloud size={14} />
-              Cloud & Sync
+              {t("sync")}
             </button>
             <button
+              role="tab"
+              aria-selected={activeTab === "cache"}
               className={`adw-btn ${activeTab === "cache" ? "adw-btn-accent" : ""}`}
               style={{ justifyContent: "flex-start", width: "100%", gap: 8 }}
               onClick={() => setActiveTab("cache")}
             >
               <HardDrive size={14} />
-              Local Cache
+              {t("cache")}
             </button>
             <button
+              role="tab"
+              aria-selected={activeTab === "accounts"}
               className={`adw-btn ${activeTab === "accounts" ? "adw-btn-accent" : ""}`}
               style={{ justifyContent: "flex-start", width: "100%", gap: 8 }}
               onClick={() => setActiveTab("accounts")}
             >
               <Users size={14} />
-              Accounts
+              {t("accounts")}
             </button>
           </div>
 
@@ -270,6 +289,27 @@ export const PreferencesDialog: React.FC = () => {
                       >
                         {showHidden ? "Showing" : "Hidden"}
                       </button>
+                    </div>
+
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: "1px solid var(--border-color)", paddingTop: 12 }}>
+                      <div>
+                        <div style={{ fontWeight: 500 }}>{t("language")}</div>
+                        <div style={{ fontSize: 12, color: "var(--dim-fg)" }}>Select display language and date/time formatting</div>
+                      </div>
+                      <select
+                        value={language}
+                        onChange={(e) => setLanguage(e.target.value as LanguageCode)}
+                        className="adw-btn"
+                        style={{ height: 32, padding: "0 10px" }}
+                        aria-label="Interface Language"
+                      >
+                        <option value="en">English (US)</option>
+                        <option value="de">Deutsch</option>
+                        <option value="fr">Français</option>
+                        <option value="es">Español</option>
+                        <option value="ja">日本語</option>
+                        <option value="hi">हिन्दी</option>
+                      </select>
                     </div>
                   </div>
                 </div>

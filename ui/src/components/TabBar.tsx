@@ -32,6 +32,7 @@ export const TabBar: React.FC = () => {
               {tabs.length > 1 && (
                 <button
                   className="adw-tab-close"
+                  aria-label="Close tab"
                   onClick={(e) => {
                     e.stopPropagation();
                     closeTab(tab.id);
@@ -48,6 +49,7 @@ export const TabBar: React.FC = () => {
 
       <button
         className="adw-btn adw-btn-icon adw-tabbar-new"
+        aria-label="New tab"
         onClick={() => openNewTab(null, null, "Files")}
         title="New Tab (Ctrl+T)"
       >

@@ -7,6 +7,7 @@ import {
   ViewMode,
 } from "../types";
 import { invokeCommand } from "../services/ipc";
+import { LanguageCode } from "../i18n";
 
 export interface BreadcrumbItem {
   id: string | null;
@@ -78,6 +79,10 @@ interface ExplorerState {
   mountAccountVfs: (accountId: string) => Promise<string>;
   unmountAccountVfs: (accountId: string) => Promise<void>;
   loadAccountMountPaths: () => Promise<void>;
+
+  // i18n
+  language: LanguageCode;
+  setLanguage: (lang: LanguageCode) => void;
 
   // Actions
   loadAccounts: () => Promise<void>;
@@ -205,6 +210,8 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
 
   isDefaultFileManager: false,
   accountMountPaths: {},
+  language: "en",
+  setLanguage: (language: LanguageCode) => set({ language }),
 
   loadAccounts: async () => {
     try {

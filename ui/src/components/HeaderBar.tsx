@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { useExplorerStore } from "../store/useExplorerStore";
 import { SortField } from "../types";
+import { getTranslation, TranslationDict } from "../i18n";
 
 export const HeaderBar: React.FC = () => {
   const {
@@ -54,7 +55,10 @@ export const HeaderBar: React.FC = () => {
     toggleGlobalSearch,
     setPreferencesOpen,
     setDiagnosticsOpen,
+    language,
   } = useExplorerStore();
+
+  const t = (k: keyof TranslationDict) => getTranslation(k, language);
 
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
@@ -184,11 +188,12 @@ export const HeaderBar: React.FC = () => {
   ];
 
   return (
-    <header className="adw-headerbar">
+    <header className="adw-headerbar" role="toolbar" aria-label="Window header bar">
       {/* Left Navigation Controls */}
       <div className="adw-headerbar-left">
         <button
           className="adw-btn adw-btn-icon"
+          aria-label="Back"
           onClick={goBack}
           disabled={historyIndex === 0}
           title="Back (Alt+Left)"
@@ -198,6 +203,7 @@ export const HeaderBar: React.FC = () => {
 
         <button
           className="adw-btn adw-btn-icon"
+          aria-label="Forward"
           onClick={goForward}
           disabled={historyIndex >= history.length - 1}
           title="Forward (Alt+Right)"
@@ -207,6 +213,7 @@ export const HeaderBar: React.FC = () => {
 
         <button
           className="adw-btn adw-btn-icon"
+          aria-label="Parent folder"
           onClick={goUp}
           disabled={breadcrumbs.length <= 1}
           title="Parent Folder (Alt+Up)"
@@ -296,7 +303,7 @@ export const HeaderBar: React.FC = () => {
                   paddingLeft: 28,
                   paddingRight: 26,
                 }}
-                placeholder={isGlobalSearch ? "Search all accounts (FTS5)..." : "Search current folder..."}
+                placeholder={isGlobalSearch ? `${t("globalSearch")}...` : t("searchPlaceholder")}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -331,6 +338,7 @@ export const HeaderBar: React.FC = () => {
         {!isSearchOpen && (
           <button
             className="adw-btn adw-btn-icon"
+            aria-label="Search files and cloud"
             onClick={() => setIsSearchOpen(true)}
             title="Search (Ctrl+F)"
           >
@@ -341,6 +349,7 @@ export const HeaderBar: React.FC = () => {
         {/* Hidden Files Toggle */}
         <button
           className={`adw-btn adw-btn-icon ${showHidden ? "adw-btn-accent" : ""}`}
+          aria-label="Toggle hidden files"
           onClick={toggleShowHidden}
           title={`Hidden Files: ${showHidden ? "Shown" : "Hidden"} (Ctrl+H)`}
         >
@@ -351,6 +360,7 @@ export const HeaderBar: React.FC = () => {
         <div style={{ position: "relative" }}>
           <button
             className={`adw-btn adw-btn-icon ${isSortMenuOpen ? "adw-btn-accent" : ""}`}
+            aria-label="Sort options"
             onClick={() => setIsSortMenuOpen((prev) => !prev)}
             title={`Sort: ${sortBy} (${sortDirection})`}
           >
@@ -477,6 +487,7 @@ export const HeaderBar: React.FC = () => {
               viewMode === "list" ? "adw-btn-accent" : ""
             }`}
             style={{ border: "none", height: 30, width: 30 }}
+            aria-label="List view"
             onClick={() => setViewMode("list")}
             title="List View"
           >
@@ -487,6 +498,7 @@ export const HeaderBar: React.FC = () => {
               viewMode === "grid" ? "adw-btn-accent" : ""
             }`}
             style={{ border: "none", height: 30, width: 30 }}
+            aria-label="Grid view"
             onClick={() => setViewMode("grid")}
             title="Grid View"
           >
@@ -497,6 +509,7 @@ export const HeaderBar: React.FC = () => {
         {/* New Folder Action */}
         <button
           className="adw-btn adw-btn-icon"
+          aria-label="New folder"
           onClick={() => setIsCreatingFolder(true)}
           title="New Folder (Ctrl+Shift+N)"
         >
@@ -506,6 +519,7 @@ export const HeaderBar: React.FC = () => {
         {/* Details Pane Toggle */}
         <button
           className={`adw-btn adw-btn-icon ${isDetailsPaneOpen ? "adw-btn-accent" : ""}`}
+          aria-label="Toggle details pane"
           onClick={toggleDetailsPane}
           title="Toggle Properties & Details (Ctrl+I)"
         >
@@ -516,6 +530,7 @@ export const HeaderBar: React.FC = () => {
         <div style={{ position: "relative" }}>
           <button
             className={`adw-btn adw-btn-icon ${isMenuOpen ? "adw-btn-accent" : ""}`}
+            aria-label="Application menu"
             onClick={() => setIsMenuOpen((prev) => !prev)}
             title="Menu"
           >
@@ -565,7 +580,7 @@ export const HeaderBar: React.FC = () => {
                   }}
                 >
                   <Sliders size={15} />
-                  <span>Preferences (Ctrl+,)</span>
+                  <span>{t("preferences")} (Ctrl+,)</span>
                 </button>
 
                 <button
@@ -582,7 +597,7 @@ export const HeaderBar: React.FC = () => {
                   }}
                 >
                   <Activity size={15} />
-                  <span>Diagnostics & Health (Ctrl+Shift+D)</span>
+                  <span>{t("diagnostics")} (Ctrl+Shift+D)</span>
                 </button>
 
                 <div

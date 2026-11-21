@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useExplorerStore } from "../store/useExplorerStore";
 import { AccountSyncStatus } from "../types";
+import { getTranslation, TranslationDict } from "../i18n";
 
 export const Sidebar: React.FC = () => {
   const {
@@ -27,16 +28,19 @@ export const Sidebar: React.FC = () => {
     toggleAccountOffline,
     triggerSync,
     pendingUploadsCount,
+    language,
   } = useExplorerStore();
 
+  const t = (k: keyof TranslationDict) => getTranslation(k, language);
+
   const places = [
-    { id: "place_home", name: "Home", icon: Home },
-    { id: "place_docs", name: "Documents", icon: FileText },
-    { id: "place_downloads", name: "Downloads", icon: Download },
+    { id: "place_home", name: t("home"), icon: Home },
+    { id: "place_docs", name: t("documents"), icon: FileText },
+    { id: "place_downloads", name: t("downloads"), icon: Download },
     { id: "place_music", name: "Music", icon: Music },
-    { id: "place_pictures", name: "Pictures", icon: ImageIcon },
+    { id: "place_pictures", name: t("pictures"), icon: ImageIcon },
     { id: "place_videos", name: "Videos", icon: Video },
-    { id: "place_trash", name: "Trash", icon: Trash2 },
+    { id: "place_trash", name: t("trash"), icon: Trash2 },
   ];
 
   const formatQuota = (used?: number | null, total?: number | null) => {
@@ -61,16 +65,19 @@ export const Sidebar: React.FC = () => {
   };
 
   return (
-    <aside className="adw-sidebar">
+    <aside className="adw-sidebar" role="navigation" aria-label="Sidebar navigation">
       {/* Places Section */}
       <div className="adw-sidebar-section">
-        <span className="adw-sidebar-heading">Places</span>
+        <span className="adw-sidebar-heading">{t("places")}</span>
         {places.map((place) => {
           const Icon = place.icon;
           const isActive = currentAccountId === null && currentFolderId === place.id;
           return (
             <div
               key={place.id}
+              role="button"
+              tabIndex={0}
+              aria-label={place.name}
               className={`adw-sidebar-item ${isActive ? "active" : ""}`}
               onClick={() => navigateTo(null, place.id, place.name)}
             >
@@ -84,9 +91,10 @@ export const Sidebar: React.FC = () => {
       {/* Cloud Drives & Accounts Section */}
       <div className="adw-sidebar-section">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingRight: 6 }}>
-          <span className="adw-sidebar-heading">Cloud Drives</span>
+          <span className="adw-sidebar-heading">{t("cloudStorage")}</span>
           <button
             className="adw-btn adw-btn-icon"
+            aria-label="Connect Google Drive"
             style={{ width: 22, height: 22, border: "none", background: "none" }}
             title="Connect Google Drive (OAuth PKCE)"
             onClick={() => connectGoogleDrive()}
