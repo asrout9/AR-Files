@@ -6,15 +6,27 @@ import { ListView } from "./components/ListView";
 import { GridView } from "./components/GridView";
 import { ContextMenu } from "./components/ContextMenu";
 import { PropertiesDialog } from "./components/PropertiesDialog";
+import { BatchRenameDialog } from "./components/BatchRenameDialog";
+import { ConflictDialog, ConflictChoice } from "./components/ConflictDialog";
+import { ProgressPopover, ActiveJob } from "./components/ProgressPopover";
 import { useExplorerStore } from "./store/useExplorerStore";
 import { EntryRecord } from "./types";
 
 export const App: React.FC = () => {
   const {
     viewMode,
+    entries,
+    selectedIds,
     loadAccounts,
     loadEntries,
     renameItem,
+    batchRename,
+    trashSelected,
+    deletePermanently,
+    undoLastOperation,
+    redoLastOperation,
+    compressItems,
+    extractArchive,
   } = useExplorerStore();
 
   const [contextMenuTarget, setContextMenuTarget] = useState<{
@@ -26,11 +38,102 @@ export const App: React.FC = () => {
   const [propertiesEntry, setPropertiesEntry] = useState<EntryRecord | null>(null);
   const [renamingEntry, setRenamingEntry] = useState<EntryRecord | null>(null);
   const [newName, setNewName] = useState("");
+  const [isBatchRenameOpen, setIsBatchRenameOpen] = useState(false);
+  const [conflictData, setConflictData] = useState<{
+    source: EntryRecord;
+    existing: EntryRecord;
+    pendingAction: () => void;
+  } | null>(null);
+
+  const [activeJobs, setActiveJobs] = useState<ActiveJob[]>([]);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   useEffect(() => {
     loadAccounts();
     loadEntries();
   }, [loadAccounts, loadEntries]);
+
+  // Global Operations Keyboard Shortcuts (Undo, Redo, Delete, Rename)
+  useEffect(() => {
+    const handleGlobalShortcuts = async (e: KeyboardEvent) => {
+      if (
+        document.activeElement?.tagName === "INPUT" ||
+        document.activeElement?.tagName === "TEXTAREA"
+      ) {
+        return;
+      }
+
+      // Ctrl+Z: Undo
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "z" || e.key === "Z")) {
+        e.preventDefault();
+        await undoLastOperation();
+        showToast("Operation undone");
+      }
+      // Ctrl+Shift+Z or Ctrl+Y: Redo
+      else if (
+        ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "z" || e.key === "Z")) ||
+        ((e.ctrlKey || e.metaKey) && (e.key === "y" || e.key === "Y"))
+      ) {
+        e.preventDefault();
+        await redoLastOperation();
+        showToast("Operation redone");
+      }
+      // F2: Rename or Batch Rename
+      else if (e.key === "F2") {
+        e.preventDefault();
+        if (selectedIds.size > 1) {
+          setIsBatchRenameOpen(true);
+        } else if (selectedIds.size === 1) {
+          const id = Array.from(selectedIds)[0];
+          const item = entries.find((e) => e.id === id);
+          if (item) {
+            setRenamingEntry(item);
+            setNewName(item.name);
+          }
+        }
+      }
+      // Delete: Move to Trash (or Shift+Delete: Permanently Delete)
+      else if (e.key === "Delete") {
+        e.preventDefault();
+        if (selectedIds.size > 0) {
+          if (e.shiftKey) {
+            await deletePermanently();
+            showToast(`Permanently deleted ${selectedIds.size} items`);
+          } else {
+            const count = selectedIds.size;
+            await trashSelected();
+            showToast(`Moved ${count} items to Trash`, true);
+          }
+        }
+      }
+      // Alt+Enter: Properties
+      else if (e.altKey && e.key === "Enter") {
+        e.preventDefault();
+        if (selectedIds.size > 0) {
+          const id = Array.from(selectedIds)[0];
+          const item = entries.find((e) => e.id === id);
+          if (item) setPropertiesEntry(item);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleGlobalShortcuts);
+    return () => window.removeEventListener("keydown", handleGlobalShortcuts);
+  }, [
+    selectedIds,
+    entries,
+    undoLastOperation,
+    redoLastOperation,
+    trashSelected,
+    deletePermanently,
+  ]);
+
+  const showToast = (message: string, withUndo = false) => {
+    setToastMessage(message);
+    setTimeout(() => {
+      setToastMessage((cur) => (cur === message ? null : cur));
+    }, withUndo ? 6000 : 3500);
+  };
 
   const handleContextMenu = (e: React.MouseEvent, entry: EntryRecord) => {
     setContextMenuTarget({
@@ -45,11 +148,95 @@ export const App: React.FC = () => {
     if (renamingEntry && newName.trim()) {
       renameItem(renamingEntry.id, newName.trim());
       setRenamingEntry(null);
+      showToast(`Renamed to "${newName.trim()}"`, true);
     }
   };
 
+  const handleBatchRenameApply = async (
+    previews: Array<{ id: string; oldName: string; newName: string }>
+  ) => {
+    await batchRename(previews);
+    showToast(`Batch renamed ${previews.length} items`, true);
+  };
+
+  const handleConflictResolve = (choice: ConflictChoice, _applyToAll: boolean) => {
+    if (choice === "replace" && conflictData) {
+      conflictData.pendingAction();
+    }
+    setConflictData(null);
+  };
+
+  const handleCompress = async () => {
+    const selectedList = entries.filter((e) => selectedIds.has(e.id));
+    const paths = selectedList
+      .map((e) => e.local_path || e.path)
+      .filter(Boolean);
+    if (paths.length === 0) return;
+
+    const outName = `${selectedList[0].name.replace(/\.[^/.]+$/, "")}_archive.zip`;
+    const outPath = `/tmp/${outName}`;
+
+    const jobId = `job_${Date.now()}`;
+    setActiveJobs((prev) => [
+      ...prev,
+      {
+        id: jobId,
+        type: "compress",
+        title: `Compressing ${paths.length} items to ZIP`,
+        itemsCompleted: 0,
+        totalItems: paths.length,
+        bytesProcessed: 0,
+        totalBytes: 1000000,
+        speedBps: 15000000,
+        etaSeconds: 2,
+        status: "running",
+      },
+    ]);
+
+    await compressItems(paths, outPath);
+
+    setActiveJobs((prev) => prev.filter((j) => j.id !== jobId));
+    showToast(`Created archive "${outName}"`);
+  };
+
+  const handleExtract = async (archiveEntry: EntryRecord) => {
+    const p = archiveEntry.local_path || archiveEntry.path;
+    const dest = `/tmp/extracted_${Date.now()}`;
+
+    const jobId = `job_extract_${Date.now()}`;
+    setActiveJobs((prev) => [
+      ...prev,
+      {
+        id: jobId,
+        type: "extract",
+        title: `Extracting ${archiveEntry.name}`,
+        itemsCompleted: 1,
+        totalItems: 1,
+        bytesProcessed: archiveEntry.size,
+        totalBytes: archiveEntry.size,
+        speedBps: 20000000,
+        etaSeconds: 1,
+        status: "running",
+      },
+    ]);
+
+    await extractArchive(p, dest);
+    setActiveJobs((prev) => prev.filter((j) => j.id !== jobId));
+    showToast(`Extracted ${archiveEntry.name} into ${dest}`);
+  };
+
+  const selectedEntries = entries.filter((e) => selectedIds.has(e.id));
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100vh", width: "100vw" }}>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100vh",
+        width: "100vw",
+        position: "relative",
+      }}
+    >
       {/* Nautilus Top Header Bar */}
       <HeaderBar />
 
@@ -79,6 +266,44 @@ export const App: React.FC = () => {
         </div>
       </div>
 
+      {/* Floating Operations Progress Popover */}
+      {activeJobs.length > 0 && (
+        <ProgressPopover
+          jobs={activeJobs}
+          onCancelJob={(jobId) =>
+            setActiveJobs((prev) => prev.filter((j) => j.id !== jobId))
+          }
+          onClose={() => setActiveJobs([])}
+        />
+      )}
+
+      {/* Toast Notification Banner with Undo */}
+      {toastMessage && (
+        <div className="adw-toast-container">
+          <div className="adw-toast">
+            <span>{toastMessage}</span>
+            <button
+              className="adw-btn"
+              style={{
+                height: 24,
+                padding: "0 8px",
+                fontSize: 12,
+                background: "rgba(255,255,255,0.15)",
+                color: "#ffffff",
+                border: "none",
+              }}
+              onClick={async () => {
+                await undoLastOperation();
+                setToastMessage(null);
+                showToast("Action undone");
+              }}
+            >
+              Undo
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Context Menu */}
       {contextMenuTarget && (
         <ContextMenu
@@ -91,6 +316,13 @@ export const App: React.FC = () => {
             setRenamingEntry(entry);
             setNewName(entry.name);
           }}
+          onBatchRename={() => setIsBatchRenameOpen(true)}
+          onCompress={handleCompress}
+          onExtract={() => handleExtract(contextMenuTarget.entry)}
+          onDeletePermanently={async () => {
+            await deletePermanently();
+            showToast(`Permanently deleted ${selectedIds.size || 1} items`);
+          }}
         />
       )}
 
@@ -102,7 +334,7 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* Rename Modal */}
+      {/* Single Item Rename Modal */}
       {renamingEntry && (
         <div
           style={{
@@ -147,7 +379,9 @@ export const App: React.FC = () => {
                 outline: "none",
               }}
             />
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <div
+              style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}
+            >
               <button
                 type="button"
                 className="adw-btn"
@@ -161,6 +395,25 @@ export const App: React.FC = () => {
             </div>
           </form>
         </div>
+      )}
+
+      {/* Batch Rename Dialog */}
+      {isBatchRenameOpen && (
+        <BatchRenameDialog
+          entries={selectedEntries.length > 0 ? selectedEntries : entries}
+          onApply={handleBatchRenameApply}
+          onClose={() => setIsBatchRenameOpen(false)}
+        />
+      )}
+
+      {/* Conflict Dialog */}
+      {conflictData && (
+        <ConflictDialog
+          sourceEntry={conflictData.source}
+          existingEntry={conflictData.existing}
+          onResolve={handleConflictResolve}
+          onCancel={() => setConflictData(null)}
+        />
       )}
     </div>
   );

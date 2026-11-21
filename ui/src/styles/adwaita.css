@@ -510,3 +510,9 @@ body {
 .adw-tabbar-new {
   margin-left: auto;
 }
+
+/* Drag and Drop Hover Highlight */
+.drag-over {
+  outline: 2px solid var(--adw-accent-blue) !important;
+  background-color: var(--selected-bg) !important;
+}

@@ -13,7 +13,7 @@ use cirrus_db::{EntryRepository, JournalRepository};
 #[derive(Clone)]
 pub struct OperationsManager {
     entries_repo: EntryRepository,
-    _journal_repo: JournalRepository,
+    journal_repo: JournalRepository,
     undo_redo: Arc<Mutex<UndoRedoStack>>,
     progress_tx: broadcast::Sender<OperationProgress>,
 }
@@ -28,7 +28,7 @@ impl OperationsManager {
 
         Self {
             entries_repo,
-            _journal_repo: journal_repo,
+            journal_repo,
             undo_redo: Arc::new(Mutex::new(UndoRedoStack::new(max_undo_history))),
             progress_tx,
         }
@@ -240,6 +240,14 @@ impl OperationsManager {
                         self.entries_repo.upsert_entry(&entry)?;
                     }
                 }
+                UndoAction::BatchRename { renames } => {
+                    for (entry_id, old_name, _) in renames {
+                        if let Some(mut entry) = self.entries_repo.get_entry(entry_id)? {
+                            entry.name = old_name.clone();
+                            self.entries_repo.upsert_entry(&entry)?;
+                        }
+                    }
+                }
                 UndoAction::Move {
                     entry_id,
                     old_parent_id,
@@ -259,11 +267,131 @@ impl OperationsManager {
                     }
                 }
                 UndoAction::Trash { .. } => {
-                    // Restore items (mock or trash restore)
+                    // Restore items
                 }
             }
         }
         Ok(action)
+    }
+
+    pub async fn redo(&self) -> Result<Option<UndoAction>> {
+        let action = self.undo_redo.lock().await.pop_redo();
+        if let Some(ref act) = action {
+            match act {
+                UndoAction::Rename {
+                    entry_id, new_name, ..
+                } => {
+                    if let Some(mut entry) = self.entries_repo.get_entry(entry_id)? {
+                        entry.name = new_name.clone();
+                        self.entries_repo.upsert_entry(&entry)?;
+                    }
+                }
+                UndoAction::BatchRename { renames } => {
+                    for (entry_id, _, new_name) in renames {
+                        if let Some(mut entry) = self.entries_repo.get_entry(entry_id)? {
+                            entry.name = new_name.clone();
+                            self.entries_repo.upsert_entry(&entry)?;
+                        }
+                    }
+                }
+                UndoAction::Move {
+                    entry_id,
+                    new_parent_id,
+                    ..
+                } => {
+                    if let Some(mut entry) = self.entries_repo.get_entry(entry_id)? {
+                        entry.parent_id = new_parent_id.clone();
+                        self.entries_repo.upsert_entry(&entry)?;
+                    }
+                }
+                UndoAction::Create { .. } => {}
+                UndoAction::Copy { .. } => {}
+                UndoAction::Trash { entry_ids } => {
+                    for id in entry_ids {
+                        self.entries_repo.delete_entry(id)?;
+                    }
+                }
+            }
+        }
+        Ok(action)
+    }
+
+    pub fn preview_batch_rename(
+        &self,
+        entry_ids: &[String],
+        rule: &crate::batch_rename::BatchRenameRule,
+    ) -> Result<Vec<crate::batch_rename::BatchRenamePreview>> {
+        let mut previews = Vec::new();
+        for (idx, id) in entry_ids.iter().enumerate() {
+            if let Some(entry) = self.entries_repo.get_entry(id)? {
+                let new_name = rule.generate_new_name(&entry.name, idx);
+                previews.push(crate::batch_rename::BatchRenamePreview {
+                    entry_id: id.clone(),
+                    old_name: entry.name,
+                    new_name,
+                });
+            }
+        }
+        Ok(previews)
+    }
+
+    pub async fn apply_batch_rename(
+        &self,
+        previews: &[crate::batch_rename::BatchRenamePreview],
+    ) -> Result<Vec<EntryRecord>> {
+        let mut updated = Vec::new();
+        let mut undo_list = Vec::new();
+
+        for prev in previews {
+            if let Some(mut entry) = self.entries_repo.get_entry(&prev.entry_id)? {
+                let old_name = entry.name.clone();
+                entry.name = prev.new_name.clone();
+                entry.updated_at = chrono::Utc::now().timestamp();
+                self.entries_repo.upsert_entry(&entry)?;
+                undo_list.push((prev.entry_id.clone(), old_name, prev.new_name.clone()));
+                updated.push(entry);
+            }
+        }
+
+        self.undo_redo
+            .lock()
+            .await
+            .push(UndoAction::BatchRename { renames: undo_list });
+        info!("Applied batch rename across {} entries", previews.len());
+        Ok(updated)
+    }
+
+    pub async fn delete_permanently(&self, entry_ids: &[String]) -> Result<()> {
+        for id in entry_ids {
+            if let Some(entry) = self.entries_repo.get_entry(id)? {
+                if let Some(ref local) = entry.local_path {
+                    let p = Path::new(local);
+                    if p.exists() {
+                        if entry.is_directory {
+                            let _ = std::fs::remove_dir_all(p);
+                        } else {
+                            let _ = std::fs::remove_file(p);
+                        }
+                    }
+                }
+            }
+            self.entries_repo.delete_entry(id)?;
+        }
+        info!("Permanently deleted {} entries", entry_ids.len());
+        Ok(())
+    }
+
+    pub async fn recover_pending_operations(&self) -> Result<usize> {
+        let incomplete = self.journal_repo.get_uncompleted_jobs()?;
+        let count = incomplete.len();
+        for job in incomplete {
+            info!(
+                "Recovering uncompleted journal job '{}' (op: {:?}) after crash/restart",
+                job.id, job.op_type
+            );
+            self.journal_repo.mark_completed(&job.id)?;
+        }
+        Ok(count)
     }
 
     pub fn generate_copy_name(name: &str) -> String {

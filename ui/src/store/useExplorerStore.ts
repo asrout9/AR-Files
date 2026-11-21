@@ -94,6 +94,14 @@ interface ExplorerState {
   createFolder: (name: string) => Promise<void>;
   renameItem: (id: string, newName: string) => Promise<void>;
   trashSelected: () => Promise<void>;
+  deletePermanently: () => Promise<void>;
+  undoLastOperation: () => Promise<void>;
+  redoLastOperation: () => Promise<void>;
+  batchRename: (previews: Array<{ id: string; oldName: string; newName: string }>) => Promise<void>;
+  moveItems: (entryIds: string[], targetParentId: string | null) => Promise<void>;
+  copyItems: (entryIds: string[], targetParentId: string | null, collision?: "replace" | "skip" | "keep_both") => Promise<void>;
+  compressItems: (sourcePaths: string[], outputPath: string) => Promise<void>;
+  extractArchive: (archivePath: string, destinationDir: string) => Promise<void>;
 }
 
 const initialBreadcrumbs: BreadcrumbItem[] = [{ id: null, name: "Google Drive" }];
@@ -545,6 +553,101 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
       await get().loadEntries();
     } catch (err) {
       console.error("Trash failed", err);
+    }
+  },
+
+  deletePermanently: async () => {
+    const { selectedIds } = get();
+    if (selectedIds.size === 0) return;
+    try {
+      await invokeCommand("delete_permanently", {
+        entry_ids: Array.from(selectedIds),
+      });
+      set({ selectedIds: new Set(), lastSelectedAnchorId: null });
+      await get().loadEntries();
+    } catch (err) {
+      console.error("Permanent delete failed", err);
+    }
+  },
+
+  undoLastOperation: async () => {
+    try {
+      await invokeCommand("undo_last_operation");
+      await get().loadEntries();
+    } catch (err) {
+      console.error("Undo failed", err);
+    }
+  },
+
+  redoLastOperation: async () => {
+    try {
+      await invokeCommand("redo_last_operation");
+      await get().loadEntries();
+    } catch (err) {
+      console.error("Redo failed", err);
+    }
+  },
+
+  batchRename: async (previews) => {
+    try {
+      const payload = previews.map((p) => ({
+        entry_id: p.id,
+        old_name: p.oldName,
+        new_name: p.newName,
+      }));
+      await invokeCommand("apply_batch_rename", { previews: payload });
+      await get().loadEntries();
+    } catch (err) {
+      console.error("Batch rename failed", err);
+    }
+  },
+
+  moveItems: async (entryIds, targetParentId) => {
+    try {
+      await invokeCommand("move_entries", {
+        entry_ids: entryIds,
+        target_parent_id: targetParentId,
+      });
+      await get().loadEntries();
+    } catch (err) {
+      console.error("Move failed", err);
+    }
+  },
+
+  copyItems: async (entryIds, targetParentId, collision = "keep_both") => {
+    try {
+      await invokeCommand("copy_entries", {
+        entry_ids: entryIds,
+        target_parent_id: targetParentId,
+        collision,
+      });
+      await get().loadEntries();
+    } catch (err) {
+      console.error("Copy failed", err);
+    }
+  },
+
+  compressItems: async (sourcePaths, outputPath) => {
+    try {
+      await invokeCommand("compress_entries", {
+        source_paths: sourcePaths,
+        output_path: outputPath,
+      });
+      await get().loadEntries();
+    } catch (err) {
+      console.error("Compress failed", err);
+    }
+  },
+
+  extractArchive: async (archivePath, destinationDir) => {
+    try {
+      await invokeCommand("extract_archive", {
+        archive_path: archivePath,
+        destination_dir: destinationDir,
+      });
+      await get().loadEntries();
+    } catch (err) {
+      console.error("Extract failed", err);
     }
   },
 }));

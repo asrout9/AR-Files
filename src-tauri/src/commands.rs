@@ -100,6 +100,59 @@ pub async fn undo_last_operation(state: &AppState) -> Result<()> {
     Ok(())
 }
 
+pub async fn redo_last_operation(state: &AppState) -> Result<()> {
+    state.ops_mgr.redo().await?;
+    Ok(())
+}
+
+pub async fn delete_permanently(state: &AppState, entry_ids: Vec<String>) -> Result<()> {
+    state.ops_mgr.delete_permanently(&entry_ids).await
+}
+
+pub fn preview_batch_rename(
+    state: &AppState,
+    entry_ids: Vec<String>,
+    rule: cirrus_ops::BatchRenameRule,
+) -> Result<Vec<cirrus_ops::BatchRenamePreview>> {
+    state.ops_mgr.preview_batch_rename(&entry_ids, &rule)
+}
+
+pub async fn apply_batch_rename(
+    state: &AppState,
+    previews: Vec<cirrus_ops::BatchRenamePreview>,
+) -> Result<Vec<EntryRecord>> {
+    state.ops_mgr.apply_batch_rename(&previews).await
+}
+
+pub async fn compress_entries(source_paths: Vec<String>, output_path: String) -> Result<()> {
+    let sources: Vec<std::path::PathBuf> = source_paths
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .collect();
+    let out = std::path::Path::new(&output_path);
+
+    if output_path.ends_with(".zip") {
+        cirrus_ops::ArchiveManager::compress_zip(&sources, out).await
+    } else {
+        cirrus_ops::ArchiveManager::compress_tar_gz(&sources, out).await
+    }
+}
+
+pub async fn extract_archive(archive_path: String, destination_dir: String) -> Result<()> {
+    let arch = std::path::Path::new(&archive_path);
+    let dest = std::path::Path::new(&destination_dir);
+
+    if archive_path.ends_with(".zip") {
+        cirrus_ops::ArchiveManager::extract_zip(arch, dest).await
+    } else {
+        cirrus_ops::ArchiveManager::extract_tar_gz(arch, dest).await
+    }
+}
+
+pub async fn recover_journal(state: &AppState) -> Result<usize> {
+    state.ops_mgr.recover_pending_operations().await
+}
+
 pub fn get_default_app(state: &AppState, mime_type: &str) -> Option<DesktopEntry> {
     state.desktop_mgr.get_default_app(mime_type).cloned()
 }

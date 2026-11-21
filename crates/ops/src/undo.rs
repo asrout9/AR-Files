@@ -9,6 +9,9 @@ pub enum UndoAction {
         old_name: String,
         new_name: String,
     },
+    BatchRename {
+        renames: Vec<(String, String, String)>,
+    },
     Move {
         entry_id: String,
         old_parent_id: Option<String>,
