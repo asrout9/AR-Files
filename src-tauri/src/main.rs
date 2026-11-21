@@ -100,5 +100,9 @@ async fn main() -> Result<()> {
 
     info!("AR Files backend initialized cleanly. Ready for UI connections.");
 
+    // Keep backend alive until SIGINT or SIGTERM
+    let _ = tokio::signal::ctrl_c().await;
+    info!("AR Files backend shutting down cleanly.");
+
     Ok(())
 }
