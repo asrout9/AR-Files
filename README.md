@@ -1,4 +1,4 @@
-# Cirrus Files (AR Files)
+# AR Files
 
 > **Cloud-native, freeze-proof desktop file manager for Fedora Workstation (GNOME 50 / Libadwaita).**
 > Built with Rust, Tauri 2, and React + TypeScript.
@@ -9,7 +9,7 @@
 
 In standard GNOME Files (Nautilus), opening remote cloud folders (GVfs, Google Drive, OneDrive, WebDAV) performs synchronous metadata fetches and `stat` calls directly on the UI path. When a remote mount is slow, rate-limited, or offline, the entire Nautilus interface freezes, spins, and stops responding.
 
-**Cirrus Files makes this class of freeze architecturally impossible.**
+**AR Files makes this class of freeze architecturally impossible.**
 
 ### Architectural Invariants:
 1. **Local-first SQLite metadata**: All folder trees, mtimes, sizes, states, and provider IDs are stored locally in SQLite (`WAL` mode). Directory listings, sorting, and filtering read exclusively from the local DB. Opening a folder *never* blocks on network I/O.
@@ -106,32 +106,32 @@ npm run build
 Build and install using the provided spec file:
 ```bash
 # Build RPM package
-rpmbuild -ba packaging/rpm/cirrus-files.spec
+rpmbuild -ba packaging/rpm/ar-files.spec
 
 # Install on Fedora
-sudo dnf install ~/rpmbuild/RPMS/x86_64/cirrus-files-0.1.0-1.fc45.x86_64.rpm
+sudo dnf install ~/rpmbuild/RPMS/x86_64/ar-files-0.1.0-1.fc45.x86_64.rpm
 ```
 
 Installed components:
-- `/usr/bin/cirrus-files`: Main executable
-- `/usr/share/applications/org.cirrusfiles.CirrusFiles.desktop`: Desktop launcher
-- `/usr/share/metainfo/org.cirrusfiles.CirrusFiles.metainfo.xml`: AppStream catalog entry
-- `/usr/share/icons/hicolor/scalable/apps/org.cirrusfiles.CirrusFiles.svg`: Libadwaita scalable icon
+- `/usr/bin/ar-files`: Main executable
+- `/usr/share/applications/org.arfiles.ARFiles.desktop`: Desktop launcher
+- `/usr/share/metainfo/org.arfiles.ARFiles.metainfo.xml`: AppStream catalog entry
+- `/usr/share/icons/hicolor/scalable/apps/org.arfiles.ARFiles.svg`: Libadwaita scalable icon
 - `/usr/share/dbus-1/services/org.freedesktop.FileManager1.service`: D-Bus activation service
-- `/usr/lib/systemd/user/cirrus-files.service`: Background daemon unit
+- `/usr/lib/systemd/user/ar-files.service`: Background daemon unit
 
 ### Flatpak
 ```bash
-flatpak-builder --user --install --force-clean build-dir packaging/flatpak/org.cirrusfiles.CirrusFiles.json
+flatpak-builder --user --install --force-clean build-dir packaging/flatpak/org.arfiles.ARFiles.json
 ```
 
 ---
 
 ## 7. Manual Verification Guide (Fedora Workstation)
 
-1. **Launch Cirrus Files**:
+1. **Launch AR Files**:
    ```bash
-   cargo run --bin cirrus-files
+   cargo run --bin ar-files
    ```
 2. **Explore Sidebar**:
    - Verify standard Places: Home, Documents, Downloads, Pictures, Music, Videos, Trash.
@@ -152,7 +152,7 @@ flatpak-builder --user --install --force-clean build-dir packaging/flatpak/org.c
      ```bash
      busctl --user call org.freedesktop.FileManager1 /org/freedesktop/FileManager1 org.freedesktop.FileManager1 ShowFolders as 1 "file:///home" ""
      ```
-   - Confirm request dispatches cleanly to Cirrus Files.
+   - Confirm request dispatches cleanly to AR Files.
 
 ---
 

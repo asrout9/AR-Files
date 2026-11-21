@@ -7,7 +7,7 @@ pub mod state;
 
 pub use account::{AccountRecord, AccountSyncStatus, ProviderType};
 pub use entry::{AccountId, DiffEvent, EntryId, EntryRecord};
-pub use error::{CirrusError, Result};
+pub use error::{ArError, CirrusError, RecoveryAction, Result};
 pub use journal::{JobStatus, JournalOpType, JournalRecord};
 pub use query::{FolderListingQuery, PagedResult, SortDirection, SortField};
 pub use state::FileState;

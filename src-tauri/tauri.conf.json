@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AR Files",
+  "version": "0.1.0",
+  "identifier": "org.arfiles.ARFiles",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "AR Files",
+        "width": 1100,
+        "height": 720,
+        "minWidth": 720,
+        "minHeight": 500,
+        "decorations": true,
+        "transparent": false,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: asset:;"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "../packaging/icons/hicolor/scalable/apps/org.arfiles.ARFiles.svg"
+    ],
+    "category": "FileManager",
+    "shortDescription": "Cloud-native desktop file manager for Fedora and GNOME",
+    "longDescription": "AR Files is a cloud-native desktop file manager engineered for Fedora Workstation (GNOME 50 / Libadwaita). Instant browsing, sparse placeholder files, on-demand hydration, and never-freezing local-first SQLite metadata."
+  }
+}

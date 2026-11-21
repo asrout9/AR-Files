@@ -16,7 +16,7 @@ async fn main() -> Result<()> {
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
 
-    info!("Starting Cirrus Files (AR Files) Desktop Manager...");
+    info!("Starting AR Files Desktop Manager...");
 
     let state = AppState::new()?;
 
@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
         state.entries_repo.upsert_entry(&report_file)?;
     }
 
-    info!("Cirrus Files backend initialized cleanly. Ready for UI connections.");
+    info!("AR Files backend initialized cleanly. Ready for UI connections.");
 
     Ok(())
 }

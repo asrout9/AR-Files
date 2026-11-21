@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="folderGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#62a0ea"/>
+      <stop offset="100%" stop-color="#1c71d8"/>
+    </linearGradient>
+    <linearGradient id="cloudGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#f6f5f4"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <!-- Folder Tab -->
+  <path d="M16 28 C16 22 20 18 26 18 L50 18 C55 18 58 21 62 25 L68 31 C70 33 73 34 76 34 L102 34 C108 34 112 38 112 44 L112 50 L16 50 Z" fill="#1a5fb4"/>
+
+  <!-- Folder Body Squircle -->
+  <rect x="12" y="36" width="104" height="76" rx="16" fill="url(#folderGradient)" filter="url(#shadow)"/>
+
+  <!-- Folder Lip Highlight -->
+  <path d="M28 36 L100 36" stroke="#99c1f1" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- Cloud Emblem with Sync Ring -->
+  <g transform="translate(36, 52)" filter="url(#shadow)">
+    <!-- Cloud base -->
+    <path d="M18 42 C11.373 42 6 36.627 6 30 C6 24.28 9.98 19.49 15.36 18.27 C16.92 10.66 23.63 5 31.7 5 C39.54 5 46.12 10.36 47.92 17.65 C52.48 18.42 56 22.4 56 27.2 C56 32.72 51.52 37.2 46 37.2 L18 37.2"
+          fill="url(#cloudGradient)"/>
+    
+    <!-- Sync Arrow Ring Motif -->
+    <path d="M38 28 A 9 9 0 1 1 29 19" fill="none" stroke="#3584e4" stroke-width="3" stroke-linecap="round"/>
+    <polygon points="38,15 44,21 38,27" fill="#3584e4"/>
+  </g>
+</svg>

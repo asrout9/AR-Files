@@ -53,4 +53,47 @@ pub enum CirrusError {
     UnresponsiveMount { path: String },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryAction {
+    Retry,
+    OpenLog,
+    Reconnect,
+    None,
+}
+
+impl CirrusError {
+    pub fn recovery_action(&self) -> RecoveryAction {
+        match self {
+            Self::AuthRequired { .. } => RecoveryAction::Reconnect,
+            Self::CircuitBreakerOpen { .. }
+            | Self::Provider { .. }
+            | Self::UnresponsiveMount { .. } => RecoveryAction::Retry,
+            Self::Database(_) | Self::Storage(_) | Self::Sync(_) | Self::Io(_) => {
+                RecoveryAction::OpenLog
+            }
+            _ => RecoveryAction::None,
+        }
+    }
+
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::NotFound { entity, id } => format!("{} '{}' could not be found.", entity, id),
+            Self::AuthRequired { reason, .. } => {
+                format!("Account disconnected: {}. Please sign in again.", reason)
+            }
+            Self::CircuitBreakerOpen { .. } => {
+                "Remote service is temporarily unresponsive. Operating in offline mode.".to_string()
+            }
+            Self::UnresponsiveMount { path } => format!(
+                "Mount '{}' is unresponsive. Background stat cancelled safely.",
+                path
+            ),
+            Self::Conflict { reason, .. } => format!("Sync conflict: {}", reason),
+            other => other.to_string(),
+        }
+    }
+}
+
+pub type ArError = CirrusError;
 pub type Result<T, E = CirrusError> = std::result::Result<T, E>;

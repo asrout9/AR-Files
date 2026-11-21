@@ -29,8 +29,8 @@ impl AppState {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/tmp"));
 
-        let data_dir = home.join(".local").join("share").join("cirrus-files");
-        let cache_dir = home.join(".cache").join("cirrus-files");
+        let data_dir = home.join(".local").join("share").join("ar-files");
+        let cache_dir = home.join(".cache").join("ar-files");
         let db_path = data_dir.join("metadata.db");
 
         let db_pool = DatabasePool::open_at_path(&db_path)?;

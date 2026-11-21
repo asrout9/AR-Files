@@ -1,5 +1,5 @@
 [package]
-name = "cirrus-tauri"
+name = "ar-tauri"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -22,5 +22,5 @@ chrono.workspace = true
 uuid.workspace = true
 
 [[bin]]
-name = "cirrus-files"
+name = "ar-files"
 path = "src/main.rs"

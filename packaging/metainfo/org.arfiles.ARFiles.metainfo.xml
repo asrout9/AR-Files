@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.arfiles.ARFiles</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>AR Files</name>
+  <summary>Cloud-native desktop file manager for Fedora and GNOME</summary>
+  <description>
+    <p>
+      AR Files is a high-performance desktop file manager designed for Fedora Workstation and GNOME.
+      It combines the native Libadwaita aesthetic of GNOME Files with an asynchronous, local-first cloud storage architecture.
+    </p>
+    <p>Features include:</p>
+    <ul>
+      <li>Local-first SQLite metadata engine with FTS5 instant search: browsing never blocks or freezes on slow network mounts.</li>
+      <li>Sparse placeholder files: preview entire multi-terabyte cloud drives occupying zero local disk blocks.</li>
+      <li>On-demand hydration: stream files directly into applications upon open with resumable chunked downloads.</li>
+      <li>Smart cache management: LRU disk cache eviction with customizable storage budgets and offline file pinning.</li>
+      <li>FUSE virtual filesystem: mount cloud namespaces seamlessly to any terminal or standard desktop utility.</li>
+      <li>Adwaita symbolic emblems: real-time visual indicators for sync, pin, hydration progress, and conflict status.</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">org.arfiles.ARFiles.desktop</launchable>
+  <url type="homepage">https://github.com/ar-files/ar-files</url>
+  <url type="bugtracker">https://github.com/ar-files/ar-files/issues</url>
+  <developer id="org.arfiles">
+    <name>AR Files Team</name>
+  </developer>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Browser view showing cloud placeholders and sync indicators</caption>
+      <image>https://raw.githubusercontent.com/ar-files/ar-files/main/docs/screenshots/main-view.png</image>
+    </screenshot>
+  </screenshots>
+  <releases>
+    <release version="0.1.0" date="2026-11-21">
+      <description>
+        <p>Initial release of AR Files featuring local-first metadata, virtual list browsing, FUSE integration, and Google Drive / OneDrive support.</p>
+      </description>
+    </release>
+  </releases>
+  <content_rating type="oars-1.1" />
+  <provides>
+    <mediatype>inode/directory</mediatype>
+  </provides>
+</component>
