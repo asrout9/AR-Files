@@ -156,7 +156,7 @@ pub async fn recover_journal(state: &AppState) -> Result<usize> {
 }
 
 pub fn get_default_app(state: &AppState, mime_type: &str) -> Option<DesktopEntry> {
-    state.desktop_mgr.get_default_app(mime_type).cloned()
+    state.desktop_mgr.read().get_default_app(mime_type).cloned()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -644,4 +644,90 @@ pub async fn add_generic_account(
     state.accounts_repo.upsert_account(&account)?;
     state.register_cloud_account(&acc_id, provider);
     Ok(account)
+}
+
+pub async fn mount_account_vfs(state: &AppState, account_id: String) -> Result<String> {
+    let account = state
+        .accounts_repo
+        .get_account(&account_id)?
+        .ok_or_else(|| cirrus_core::error::CirrusError::NotFound {
+            entity: "Account".to_string(),
+            id: account_id.clone(),
+        })?;
+
+    let hyd_mgr = state.hydration_mgr.clone();
+    let entries_repo_cb = state.entries_repo.clone();
+    let hydration_cb: cirrus_vfs::HydrationCallback = Arc::new(move |entry_id: &str| {
+        let entry = entries_repo_cb.get_entry(entry_id)?.ok_or_else(|| {
+            cirrus_core::error::CirrusError::NotFound {
+                entity: "Entry".to_string(),
+                id: entry_id.to_string(),
+            }
+        })?;
+        let hyd = hyd_mgr.clone();
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                hyd.hydrate(&entry, cirrus_sync::HydrationPriority::UserInteractive)
+                    .await
+            })
+        })
+    });
+
+    let mount_path = state.mount_mgr.mount_account(
+        &account_id,
+        &account.name,
+        state.entries_repo.clone(),
+        state.cache_dir.clone(),
+        Some(hydration_cb),
+    )?;
+
+    let mut updated = account;
+    updated.mount_path = Some(mount_path.to_string_lossy().to_string());
+    state.accounts_repo.upsert_account(&updated)?;
+
+    Ok(mount_path.to_string_lossy().to_string())
+}
+
+pub async fn unmount_account_vfs(state: &AppState, account_id: String) -> Result<()> {
+    state.mount_mgr.unmount_account(&account_id)?;
+    if let Some(mut account) = state.accounts_repo.get_account(&account_id)? {
+        account.mount_path = None;
+        state.accounts_repo.upsert_account(&account)?;
+    }
+    Ok(())
+}
+
+pub async fn is_account_mounted(state: &AppState, account_id: String) -> Result<bool> {
+    Ok(state.mount_mgr.is_mounted(&account_id))
+}
+
+pub async fn get_account_mount_path(
+    state: &AppState,
+    account_id: String,
+) -> Result<Option<String>> {
+    Ok(state
+        .mount_mgr
+        .get_mount_path(&account_id)
+        .map(|p| p.to_string_lossy().to_string()))
+}
+
+pub async fn list_active_mounts(state: &AppState) -> Result<Vec<(String, String)>> {
+    Ok(state
+        .mount_mgr
+        .list_active_mounts()
+        .into_iter()
+        .map(|(k, v)| (k, v.to_string_lossy().to_string()))
+        .collect())
+}
+
+pub async fn is_default_file_manager(state: &AppState) -> Result<bool> {
+    Ok(state.desktop_mgr.read().is_default_file_manager())
+}
+
+pub async fn set_as_default_file_manager(state: &AppState) -> Result<bool> {
+    state
+        .desktop_mgr
+        .write()
+        .register_as_default_file_manager()?;
+    Ok(true)
 }

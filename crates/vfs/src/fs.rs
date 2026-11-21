@@ -1,4 +1,5 @@
 use crate::inode::InodeManager;
+use cirrus_core::entry::EntryRecord;
 use cirrus_core::error::{CirrusError, Result};
 use cirrus_core::query::{FolderListingQuery, SortDirection, SortField};
 use cirrus_core::state::FileState;
@@ -6,6 +7,8 @@ use cirrus_db::EntryRepository;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+
+pub type SyncHydrationCallback<'a> = &'a dyn Fn(&str) -> Result<PathBuf>;
 
 #[derive(Debug, Clone)]
 pub struct FuseFileAttr {
@@ -135,6 +138,17 @@ impl CirrusVfs {
 
     /// Reads byte ranges from a hydrated file or cached replica.
     pub fn read_bytes(&self, ino: u64, offset: u64, size: usize) -> Result<Vec<u8>> {
+        self.read_bytes_with_hydration(ino, offset, size, None)
+    }
+
+    /// Reads byte ranges, triggering on-demand hydration if file is a cloud placeholder.
+    pub fn read_bytes_with_hydration(
+        &self,
+        ino: u64,
+        offset: u64,
+        size: usize,
+        hydration_cb: Option<SyncHydrationCallback<'_>>,
+    ) -> Result<Vec<u8>> {
         let entry_id = self
             .inode_mgr
             .get_entry_id(ino)
@@ -143,19 +157,26 @@ impl CirrusVfs {
                 id: ino.to_string(),
             })?;
 
-        let entry =
+        let mut entry =
             self.entries_repo
                 .get_entry(&entry_id)?
                 .ok_or_else(|| CirrusError::NotFound {
                     entity: "Entry".to_string(),
-                    id: entry_id,
+                    id: entry_id.clone(),
                 })?;
 
-        if !entry.state.is_locally_present() {
-            return Err(CirrusError::Hydration(format!(
-                "File '{}' is not hydrated yet (state: {:?})",
-                entry.name, entry.state
-            )));
+        if !entry.state.is_locally_present() || entry.local_path.is_none() {
+            if let Some(cb) = hydration_cb {
+                let path = cb(&entry_id)?;
+                entry.local_path = Some(path.to_string_lossy().to_string());
+                entry.state = FileState::Available;
+                self.entries_repo.upsert_entry(&entry)?;
+            } else {
+                return Err(CirrusError::Hydration(format!(
+                    "File '{}' is not hydrated yet (state: {:?})",
+                    entry.name, entry.state
+                )));
+            }
         }
 
         let local_path = entry.local_path.ok_or_else(|| {
@@ -172,5 +193,114 @@ impl CirrusVfs {
 
         let end = (start + size).min(data.len());
         Ok(data[start..end].to_vec())
+    }
+
+    /// Writes data to a cached file at a given byte offset.
+    pub fn write_bytes(&self, ino: u64, offset: u64, data: &[u8]) -> Result<usize> {
+        let entry_id = self
+            .inode_mgr
+            .get_entry_id(ino)
+            .ok_or_else(|| CirrusError::NotFound {
+                entity: "Inode".to_string(),
+                id: ino.to_string(),
+            })?;
+
+        let mut entry =
+            self.entries_repo
+                .get_entry(&entry_id)?
+                .ok_or_else(|| CirrusError::NotFound {
+                    entity: "Entry".to_string(),
+                    id: entry_id.clone(),
+                })?;
+
+        let local_path = entry
+            .local_path
+            .get_or_insert_with(|| {
+                let p = self._mount_point.join(&entry_id);
+                p.to_string_lossy().to_string()
+            })
+            .clone();
+
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&local_path)
+            .map_err(|e| CirrusError::Io(e.to_string()))?;
+
+        use std::io::{Seek, SeekFrom, Write};
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|e| CirrusError::Io(e.to_string()))?;
+        file.write_all(data)
+            .map_err(|e| CirrusError::Io(e.to_string()))?;
+
+        entry.size = entry.size.max(offset + data.len() as u64);
+        entry.mtime = chrono::Utc::now().timestamp();
+        entry.state = FileState::SyncingUp;
+        self.entries_repo.upsert_entry(&entry)?;
+
+        Ok(data.len())
+    }
+
+    /// Creates a new regular file in SQLite and VFS.
+    pub fn create_file(&self, parent_ino: u64, name: &str) -> Result<u64> {
+        let parent_id = if parent_ino == InodeManager::ROOT_INO {
+            None
+        } else {
+            self.inode_mgr.get_entry_id(parent_ino)
+        };
+
+        let entry_id = uuid::Uuid::new_v4().to_string();
+        let local_path = self._mount_point.join(&entry_id);
+        std::fs::write(&local_path, b"").map_err(|e| CirrusError::Io(e.to_string()))?;
+
+        let now = chrono::Utc::now().timestamp();
+        let entry = EntryRecord::new_placeholder(
+            entry_id.clone(),
+            self.account_id.clone(),
+            None,
+            parent_id,
+            name.to_string(),
+            format!("/{}", name),
+            false,
+            0,
+            now,
+            "application/octet-stream".to_string(),
+            Some(local_path.to_string_lossy().to_string()),
+            now,
+        );
+
+        self.entries_repo.upsert_entry(&entry)?;
+        Ok(self.inode_mgr.get_or_create_ino(&entry_id))
+    }
+
+    /// Creates a new directory in SQLite and VFS.
+    pub fn create_dir(&self, parent_ino: u64, name: &str) -> Result<u64> {
+        let parent_id = if parent_ino == InodeManager::ROOT_INO {
+            None
+        } else {
+            self.inode_mgr.get_entry_id(parent_ino)
+        };
+
+        let entry_id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().timestamp();
+        let entry = EntryRecord::new_placeholder(
+            entry_id.clone(),
+            self.account_id.clone(),
+            None,
+            parent_id,
+            name.to_string(),
+            format!("/{}", name),
+            true,
+            0,
+            now,
+            "inode/directory".to_string(),
+            None,
+            now,
+        );
+
+        self.entries_repo.upsert_entry(&entry)?;
+        Ok(self.inode_mgr.get_or_create_ino(&entry_id))
     }
 }

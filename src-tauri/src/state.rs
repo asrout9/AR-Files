@@ -13,6 +13,7 @@ use cirrus_providers::{CloudProvider, CredentialsManager, MockCloudProvider};
 use cirrus_sync::{
     BandwidthLimiter, CacheManager, HydrationManager, SyncEngine, UploadQueueManager,
 };
+use cirrus_vfs::MountManager;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -21,7 +22,7 @@ pub struct AppState {
     pub entries_repo: EntryRepository,
     pub journal_repo: JournalRepository,
     pub settings_repo: SettingsRepository,
-    pub desktop_mgr: Arc<DesktopEntryManager>,
+    pub desktop_mgr: Arc<RwLock<DesktopEntryManager>>,
     pub trash_mgr: Arc<TrashManager>,
     pub thumbnail_mgr: Arc<ThumbnailManager>,
     pub ops_mgr: OperationsManager,
@@ -35,6 +36,7 @@ pub struct AppState {
     pub sync_engines: Arc<RwLock<HashMap<String, Arc<SyncEngine>>>>,
     pub upload_queues: Arc<RwLock<HashMap<String, Arc<UploadQueueManager>>>>,
     pub hydration_mgr: Arc<HydrationManager>,
+    pub mount_mgr: Arc<MountManager>,
 }
 
 impl AppState {
@@ -53,12 +55,13 @@ impl AppState {
         let journal_repo = JournalRepository::new(db_pool.clone());
         let settings_repo = SettingsRepository::new(db_pool.clone());
 
-        let desktop_mgr = Arc::new(DesktopEntryManager::new());
+        let desktop_mgr = Arc::new(RwLock::new(DesktopEntryManager::new()));
         let trash_mgr = Arc::new(TrashManager::new()?);
         let thumbnail_mgr = Arc::new(ThumbnailManager::new());
         let ops_mgr = OperationsManager::new(entries_repo.clone(), journal_repo.clone(), 50);
         let cache_mgr = CacheManager::new(&cache_dir, entries_repo.clone());
         let hangproof_fs = HangProofFs::default();
+        let mount_mgr = Arc::new(MountManager::new(MountManager::default_mount_dir()));
 
         let credentials_mgr = CredentialsManager::default();
         let download_limiter = Arc::new(BandwidthLimiter::default());
@@ -126,6 +129,7 @@ impl AppState {
             sync_engines,
             upload_queues,
             hydration_mgr,
+            mount_mgr,
         })
     }
 

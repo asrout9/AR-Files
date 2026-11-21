@@ -6,6 +6,8 @@ import {
   HardDrive,
   Users,
   Plus,
+  Check,
+  FolderSymlink,
 } from "lucide-react";
 import { useExplorerStore } from "../store/useExplorerStore";
 
@@ -26,6 +28,12 @@ export const PreferencesDialog: React.FC = () => {
     setBandwidthLimits,
     downloadLimitBps,
     uploadLimitBps,
+    isDefaultFileManager,
+    checkDefaultFileManager,
+    setAsDefaultFileManager,
+    accountMountPaths,
+    mountAccountVfs,
+    unmountAccountVfs,
   } = useExplorerStore();
 
   const [activeTab, setActiveTab] = useState<PreferencesTab>("general");
@@ -49,8 +57,9 @@ export const PreferencesDialog: React.FC = () => {
     if (isPreferencesOpen) {
       setDownloadKB(downloadLimitBps > 0 ? Math.round(downloadLimitBps / 1024) : 0);
       setUploadKB(uploadLimitBps > 0 ? Math.round(uploadLimitBps / 1024) : 0);
+      checkDefaultFileManager();
     }
-  }, [isPreferencesOpen, downloadLimitBps, uploadLimitBps]);
+  }, [isPreferencesOpen, downloadLimitBps, uploadLimitBps, checkDefaultFileManager]);
 
   if (!isPreferencesOpen) return null;
 
@@ -262,6 +271,56 @@ export const PreferencesDialog: React.FC = () => {
                         {showHidden ? "Showing" : "Hidden"}
                       </button>
                     </div>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 style={{ fontSize: 13, fontWeight: 700, textTransform: "uppercase", color: "var(--dim-fg)", marginBottom: 8 }}>
+                    System Integration
+                  </h4>
+
+                  <div
+                    style={{
+                      background: "var(--card-bg)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "var(--adw-radius-m)",
+                      padding: "14px 16px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 500 }}>Default File Manager</div>
+                      <div style={{ fontSize: 12, color: "var(--dim-fg)" }}>
+                        Handle directory opening (`inode/directory`) and org.freedesktop.FileManager1 D-Bus requests
+                      </div>
+                    </div>
+                    {isDefaultFileManager ? (
+                      <span
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          fontSize: 12,
+                          fontWeight: 600,
+                          color: "var(--success-color, #2ec27e)",
+                          background: "rgba(46, 194, 126, 0.12)",
+                          padding: "6px 12px",
+                          borderRadius: "var(--adw-radius-s)",
+                        }}
+                      >
+                        <Check size={14} />
+                        Default Manager
+                      </span>
+                    ) : (
+                      <button
+                        className="adw-btn adw-btn-accent"
+                        onClick={() => setAsDefaultFileManager()}
+                      >
+                        Set as Default
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -552,18 +611,54 @@ export const PreferencesDialog: React.FC = () => {
                         </div>
                       </div>
 
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span
-                          style={{
-                            fontSize: 11,
-                            padding: "2px 8px",
-                            borderRadius: "var(--adw-radius-s)",
-                            background: "var(--hover-bg)",
-                            textTransform: "capitalize",
-                          }}
-                        >
-                          {acc.provider_type}
-                        </span>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span
+                            style={{
+                              fontSize: 11,
+                              padding: "2px 8px",
+                              borderRadius: "var(--adw-radius-s)",
+                              background: "var(--hover-bg)",
+                              textTransform: "capitalize",
+                            }}
+                          >
+                            {acc.provider_type}
+                          </span>
+                          {accountMountPaths[acc.id] || acc.mount_path ? (
+                            <button
+                              className="adw-btn"
+                              style={{ height: 26, fontSize: 11, padding: "0 8px" }}
+                              onClick={() => unmountAccountVfs(acc.id)}
+                            >
+                              Unmount
+                            </button>
+                          ) : (
+                            <button
+                              className="adw-btn adw-btn-accent"
+                              style={{ height: 26, fontSize: 11, padding: "0 8px" }}
+                              onClick={() => mountAccountVfs(acc.id)}
+                            >
+                              Mount FUSE
+                            </button>
+                          )}
+                        </div>
+                        {(accountMountPaths[acc.id] || acc.mount_path) && (
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 4,
+                              fontSize: 11,
+                              color: "var(--active-accent)",
+                              background: "rgba(53, 132, 228, 0.08)",
+                              padding: "2px 6px",
+                              borderRadius: "var(--adw-radius-s)",
+                            }}
+                          >
+                            <FolderSymlink size={12} />
+                            <span>{accountMountPaths[acc.id] || acc.mount_path}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}

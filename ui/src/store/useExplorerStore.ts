@@ -70,6 +70,15 @@ interface ExplorerState {
   downloadLimitBps: number;
   uploadLimitBps: number;
 
+  // Desktop & FUSE
+  isDefaultFileManager: boolean;
+  accountMountPaths: Record<string, string | null>;
+  checkDefaultFileManager: () => Promise<void>;
+  setAsDefaultFileManager: () => Promise<void>;
+  mountAccountVfs: (accountId: string) => Promise<string>;
+  unmountAccountVfs: (accountId: string) => Promise<void>;
+  loadAccountMountPaths: () => Promise<void>;
+
   // Actions
   loadAccounts: () => Promise<void>;
   loadEntries: () => Promise<void>;
@@ -194,10 +203,15 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
   downloadLimitBps: 0,
   uploadLimitBps: 0,
 
+  isDefaultFileManager: false,
+  accountMountPaths: {},
+
   loadAccounts: async () => {
     try {
       const accounts = await invokeCommand<AccountRecord[]>("list_accounts");
       set({ accounts });
+      get().loadAccountMountPaths();
+      get().checkDefaultFileManager();
     } catch (err) {
       console.error("Failed to load accounts", err);
     }
@@ -953,5 +967,76 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
     } catch (err) {
       console.error("Extract failed", err);
     }
+  },
+
+  checkDefaultFileManager: async () => {
+    try {
+      const isDefault = await invokeCommand<boolean>("is_default_file_manager");
+      set({ isDefaultFileManager: Boolean(isDefault) });
+    } catch (err) {
+      console.error("Failed to check default file manager", err);
+    }
+  },
+
+  setAsDefaultFileManager: async () => {
+    try {
+      await invokeCommand<boolean>("set_as_default_file_manager");
+      set({ isDefaultFileManager: true });
+    } catch (err) {
+      console.error("Failed to set as default file manager", err);
+    }
+  },
+
+  mountAccountVfs: async (accountId: string) => {
+    try {
+      const acc = get().accounts.find((a) => a.id === accountId);
+      const mountPath = await invokeCommand<string>("mount_account_vfs", {
+        account_id: accountId,
+        account_name: acc?.name,
+      });
+      set((state) => ({
+        accountMountPaths: { ...state.accountMountPaths, [accountId]: mountPath },
+        accounts: state.accounts.map((a) =>
+          a.id === accountId ? { ...a, mount_path: mountPath } : a
+        ),
+      }));
+      return mountPath;
+    } catch (err) {
+      console.error("Failed to mount account VFS", err);
+      throw err;
+    }
+  },
+
+  unmountAccountVfs: async (accountId: string) => {
+    try {
+      await invokeCommand<void>("unmount_account_vfs", {
+        account_id: accountId,
+      });
+      set((state) => ({
+        accountMountPaths: { ...state.accountMountPaths, [accountId]: null },
+        accounts: state.accounts.map((a) =>
+          a.id === accountId ? { ...a, mount_path: undefined } : a
+        ),
+      }));
+    } catch (err) {
+      console.error("Failed to unmount account VFS", err);
+      throw err;
+    }
+  },
+
+  loadAccountMountPaths: async () => {
+    const { accounts } = get();
+    const mountMap: Record<string, string | null> = {};
+    for (const acc of accounts) {
+      try {
+        const p = await invokeCommand<string | null>("get_account_mount_path", {
+          account_id: acc.id,
+        });
+        mountMap[acc.id] = p;
+      } catch {
+        mountMap[acc.id] = acc.mount_path || null;
+      }
+    }
+    set({ accountMountPaths: mountMap });
   },
 }));

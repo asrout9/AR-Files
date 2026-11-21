@@ -78,6 +78,26 @@ async fn main() -> Result<()> {
         state.entries_repo.upsert_entry(&report_file)?;
     }
 
+    // Register org.freedesktop.FileManager1 D-Bus service
+    let (dbus_tx, mut dbus_rx) =
+        tokio::sync::mpsc::channel::<cirrus_platform::FileManagerRequest>(32);
+    tokio::spawn(async move {
+        match cirrus_platform::register_file_manager_service(dbus_tx).await {
+            Ok(_conn) => {
+                info!("org.freedesktop.FileManager1 D-Bus service registered successfully");
+                while let Some(req) = dbus_rx.recv().await {
+                    info!("Received D-Bus FileManager1 request: {:?}", req);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Could not register org.freedesktop.FileManager1 D-Bus service: {}",
+                    e
+                );
+            }
+        }
+    });
+
     info!("AR Files backend initialized cleanly. Ready for UI connections.");
 
     Ok(())

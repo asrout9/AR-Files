@@ -264,6 +264,137 @@ impl DesktopEntryManager {
 
         Ok(())
     }
+
+    /// Checks if AR Files (or cirrus-files) is set as the default file manager for inode/directory.
+    pub fn is_default_file_manager(&self) -> bool {
+        if let Some(app_id) = self.mime_defaults.get("inode/directory") {
+            if app_id == "ar-files.desktop"
+                || app_id == "cirrus-files.desktop"
+                || app_id == "com.cirrus.files.desktop"
+            {
+                return true;
+            }
+        }
+
+        if let Ok(output) = std::process::Command::new("xdg-mime")
+            .args(["query", "default", "inode/directory"])
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if stdout == "ar-files.desktop"
+                    || stdout == "cirrus-files.desktop"
+                    || stdout == "com.cirrus.files.desktop"
+                {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Registers AR Files as the default file manager.
+    /// Creates the .desktop file in ~/.local/share/applications/ar-files.desktop if needed,
+    /// and updates ~/.config/mimeapps.list using xdg-mime and directly in mimeapps.list.
+    pub fn register_as_default_file_manager(&mut self) -> Result<()> {
+        let app_dir = if let Some(data_home) = std::env::var_os("XDG_DATA_HOME") {
+            PathBuf::from(data_home).join("applications")
+        } else if let Some(home) = std::env::var_os("HOME") {
+            PathBuf::from(home)
+                .join(".local")
+                .join("share")
+                .join("applications")
+        } else {
+            PathBuf::from("/tmp/applications")
+        };
+        fs::create_dir_all(&app_dir)
+            .map_err(|e| CirrusError::Io(format!("Failed to create apps directory: {}", e)))?;
+
+        let desktop_file_path = app_dir.join("ar-files.desktop");
+        let desktop_content = r#"[Desktop Entry]
+Name=AR Files
+Comment=Access and organize files and cloud storage
+Exec=ar-files %U
+Icon=org.gnome.Nautilus
+Terminal=false
+Type=Application
+Categories=GNOME;GTK;Utility;Core;FileManager;
+MimeType=inode/directory;
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=ar-files --new-window
+"#;
+        fs::write(&desktop_file_path, desktop_content)
+            .map_err(|e| CirrusError::Io(format!("Failed to write desktop file: {}", e)))?;
+
+        let _ = std::process::Command::new("xdg-mime")
+            .args(["default", "ar-files.desktop", "inode/directory"])
+            .status();
+
+        let config_dir = if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME") {
+            PathBuf::from(config_home)
+        } else if let Some(home) = std::env::var_os("HOME") {
+            PathBuf::from(home).join(".config")
+        } else {
+            PathBuf::from("/tmp")
+        };
+        fs::create_dir_all(&config_dir).ok();
+        let mimeapps_path = config_dir.join("mimeapps.list");
+        Self::update_mimeapps_list(&mimeapps_path, "inode/directory", "ar-files.desktop")?;
+
+        self.mime_defaults.insert(
+            "inode/directory".to_string(),
+            "ar-files.desktop".to_string(),
+        );
+        if let Ok(parsed) = Self::parse_desktop_file(&desktop_file_path) {
+            self.applications.insert(parsed.id.clone(), parsed);
+        }
+
+        info!("Successfully registered AR Files as default file manager for inode/directory");
+        Ok(())
+    }
+
+    pub fn update_mimeapps_list(path: &Path, mime_type: &str, app_id: &str) -> Result<()> {
+        let existing = fs::read_to_string(path).unwrap_or_default();
+        let mut lines: Vec<String> = existing.lines().map(|s| s.to_string()).collect();
+        let mut in_default_section = false;
+        let mut default_section_idx = None;
+        let mut found_mime = false;
+
+        for (idx, line) in lines.iter_mut().enumerate() {
+            let trimmed = line.trim();
+            if trimmed == "[Default Applications]" {
+                in_default_section = true;
+                default_section_idx = Some(idx);
+                continue;
+            } else if trimmed.starts_with('[') && in_default_section {
+                in_default_section = false;
+            }
+
+            if in_default_section && trimmed.starts_with(&format!("{}=", mime_type)) {
+                *line = format!("{}={};", mime_type, app_id);
+                found_mime = true;
+                break;
+            }
+        }
+
+        if !found_mime {
+            if let Some(idx) = default_section_idx {
+                lines.insert(idx + 1, format!("{}={};", mime_type, app_id));
+            } else {
+                lines.push("[Default Applications]".to_string());
+                lines.push(format!("{}={};", mime_type, app_id));
+            }
+        }
+
+        fs::write(path, lines.join("\n") + "\n")
+            .map_err(|e| CirrusError::Io(format!("Failed to update mimeapps.list: {}", e)))?;
+
+        Ok(())
+    }
 }
 
 impl Default for DesktopEntryManager {

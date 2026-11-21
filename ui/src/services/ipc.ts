@@ -26,6 +26,11 @@ export async function invokeCommand<T>(cmd: string, args: Record<string, unknown
 }
 
 // In-memory mock data store for dev preview without full Tauri binary
+let mockDefaultFileManager = false;
+let mockAccountMounts: Record<string, string> = {
+  acc_gdrive: "/home/user/CloudDrives/Google_Drive",
+};
+
 let mockAccounts: AccountRecord[] = [
   {
     id: "acc_gdrive",
@@ -385,6 +390,46 @@ async function handleMockCommand<T>(cmd: string, args: Record<string, unknown>):
       };
       mockAccounts.push(newAcc);
       return newAcc as unknown as T;
+    }
+
+    case "mount_account_vfs": {
+      const accId = args.account_id as string;
+      const accName =
+        (args.account_name as string) ||
+        mockAccounts.find((a) => a.id === accId)?.name ||
+        "Drive";
+      const mountPath = `/home/user/CloudDrives/${accName.replace(/ /g, "_")}`;
+      mockAccountMounts[accId] = mountPath;
+      const acc = mockAccounts.find((a) => a.id === accId);
+      if (acc) acc.mount_path = mountPath;
+      return mountPath as unknown as T;
+    }
+
+    case "unmount_account_vfs": {
+      const accId = args.account_id as string;
+      delete mockAccountMounts[accId];
+      const acc = mockAccounts.find((a) => a.id === accId);
+      if (acc) acc.mount_path = undefined;
+      return null as unknown as T;
+    }
+
+    case "is_account_mounted": {
+      const accId = args.account_id as string;
+      return Boolean(mockAccountMounts[accId]) as unknown as T;
+    }
+
+    case "get_account_mount_path": {
+      const accId = args.account_id as string;
+      return (mockAccountMounts[accId] || null) as unknown as T;
+    }
+
+    case "is_default_file_manager": {
+      return mockDefaultFileManager as unknown as T;
+    }
+
+    case "set_as_default_file_manager": {
+      mockDefaultFileManager = true;
+      return true as unknown as T;
     }
 
     default:

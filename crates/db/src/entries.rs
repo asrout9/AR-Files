@@ -171,6 +171,45 @@ impl EntryRepository {
         }
     }
 
+    pub fn get_entry_by_name(
+        &self,
+        account_id: &str,
+        parent_id: Option<&str>,
+        name: &str,
+    ) -> Result<Option<EntryRecord>> {
+        let conn = self.pool.get()?;
+        match parent_id {
+            Some(pid) => {
+                let mut stmt = conn
+                    .prepare("SELECT * FROM entries WHERE account_id = ?1 AND parent_id = ?2 AND name = ?3")
+                    .map_err(|e| CirrusError::Database(e.to_string()))?;
+                let mut rows = stmt
+                    .query_map(params![account_id, pid, name], Self::row_to_entry)
+                    .map_err(|e| CirrusError::Database(e.to_string()))?;
+                if let Some(row) = rows.next() {
+                    row.map(Some)
+                        .map_err(|e| CirrusError::Database(e.to_string()))
+                } else {
+                    Ok(None)
+                }
+            }
+            None => {
+                let mut stmt = conn
+                    .prepare("SELECT * FROM entries WHERE account_id = ?1 AND parent_id IS NULL AND name = ?2")
+                    .map_err(|e| CirrusError::Database(e.to_string()))?;
+                let mut rows = stmt
+                    .query_map(params![account_id, name], Self::row_to_entry)
+                    .map_err(|e| CirrusError::Database(e.to_string()))?;
+                if let Some(row) = rows.next() {
+                    row.map(Some)
+                        .map_err(|e| CirrusError::Database(e.to_string()))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    }
+
     pub fn list_children_paged(
         &self,
         query: &FolderListingQuery,

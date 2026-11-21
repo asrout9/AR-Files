@@ -109,4 +109,34 @@ mod tests {
             _ => panic!("Unexpected request variant"),
         }
     }
+
+    #[test]
+    fn test_update_mimeapps_list() {
+        let temp = tempdir().unwrap();
+        let mime_path = temp.path().join("mimeapps.list");
+
+        // Initial write to non-existent file
+        DesktopEntryManager::update_mimeapps_list(
+            &mime_path,
+            "inode/directory",
+            "ar-files.desktop",
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&mime_path).unwrap();
+        assert!(content.contains("[Default Applications]"));
+        assert!(content.contains("inode/directory=ar-files.desktop;"));
+
+        // Update existing mimeapps.list
+        DesktopEntryManager::update_mimeapps_list(
+            &mime_path,
+            "inode/directory",
+            "other-files.desktop",
+        )
+        .unwrap();
+
+        let updated_content = fs::read_to_string(&mime_path).unwrap();
+        assert!(updated_content.contains("inode/directory=other-files.desktop;"));
+        assert!(!updated_content.contains("inode/directory=ar-files.desktop;"));
+    }
 }
