@@ -8,9 +8,11 @@ use cirrus_db::{
     AccountRepository, DatabasePool, EntryRepository, JournalRepository, SettingsRepository,
 };
 use cirrus_ops::OperationsManager;
-use cirrus_platform::{DesktopEntryManager, HangProofFs, TrashManager};
+use cirrus_platform::{DesktopEntryManager, HangProofFs, ThumbnailManager, TrashManager};
 use cirrus_providers::{CloudProvider, CredentialsManager, MockCloudProvider};
-use cirrus_sync::{CacheManager, HydrationManager, SyncEngine, UploadQueueManager};
+use cirrus_sync::{
+    BandwidthLimiter, CacheManager, HydrationManager, SyncEngine, UploadQueueManager,
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -21,11 +23,14 @@ pub struct AppState {
     pub settings_repo: SettingsRepository,
     pub desktop_mgr: Arc<DesktopEntryManager>,
     pub trash_mgr: Arc<TrashManager>,
+    pub thumbnail_mgr: Arc<ThumbnailManager>,
     pub ops_mgr: OperationsManager,
     pub cache_mgr: CacheManager,
     pub hangproof_fs: HangProofFs,
     pub cache_dir: PathBuf,
     pub credentials_mgr: CredentialsManager,
+    pub download_limiter: Arc<BandwidthLimiter>,
+    pub upload_limiter: Arc<BandwidthLimiter>,
     pub providers: Arc<RwLock<HashMap<String, Arc<dyn CloudProvider>>>>,
     pub sync_engines: Arc<RwLock<HashMap<String, Arc<SyncEngine>>>>,
     pub upload_queues: Arc<RwLock<HashMap<String, Arc<UploadQueueManager>>>>,
@@ -50,11 +55,14 @@ impl AppState {
 
         let desktop_mgr = Arc::new(DesktopEntryManager::new());
         let trash_mgr = Arc::new(TrashManager::new()?);
+        let thumbnail_mgr = Arc::new(ThumbnailManager::new());
         let ops_mgr = OperationsManager::new(entries_repo.clone(), journal_repo.clone(), 50);
         let cache_mgr = CacheManager::new(&cache_dir, entries_repo.clone());
         let hangproof_fs = HangProofFs::default();
 
         let credentials_mgr = CredentialsManager::default();
+        let download_limiter = Arc::new(BandwidthLimiter::default());
+        let upload_limiter = Arc::new(BandwidthLimiter::default());
 
         // Providers, Sync Engines, and Upload Queues registry
         let providers_map: HashMap<String, Arc<dyn CloudProvider>> = HashMap::new();
@@ -106,11 +114,14 @@ impl AppState {
             settings_repo,
             desktop_mgr,
             trash_mgr,
+            thumbnail_mgr,
             ops_mgr,
             cache_mgr,
             hangproof_fs,
             cache_dir,
             credentials_mgr,
+            download_limiter,
+            upload_limiter,
             providers,
             sync_engines,
             upload_queues,

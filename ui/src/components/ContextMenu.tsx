@@ -11,6 +11,8 @@ import {
   Trash,
   Share2,
   XCircle,
+  Eye,
+  History,
 } from "lucide-react";
 import { EntryRecord } from "../types";
 import { useExplorerStore } from "../store/useExplorerStore";
@@ -44,9 +46,13 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     hydrateItem,
     cancelHydration,
     pinItem,
+    unpinItem,
     freeUpSpaceItem,
     trashSelected,
     selectedIds,
+    getShareLink,
+    setQuickPreviewOpen,
+    openVersionHistory,
   } = useExplorerStore();
 
   if (!entry) return null;
@@ -69,7 +75,11 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   };
 
   const handleAlwaysKeep = () => {
-    pinItem(entry.id);
+    if (entry.state === "pinned") {
+      unpinItem(entry.id);
+    } else {
+      pinItem(entry.id);
+    }
     onClose();
   };
 
@@ -78,9 +88,14 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     onClose();
   };
 
-  const handleCopyShareLink = () => {
-    const link = `https://drive.google.com/file/d/${entry.remote_id || entry.id}/view`;
-    navigator.clipboard?.writeText(link);
+  const handleCopyShareLink = async () => {
+    try {
+      const link = await getShareLink(entry.account_id, entry.id);
+      navigator.clipboard?.writeText(link);
+    } catch {
+      const fallback = `https://cloud.ar-files.local/share/${entry.remote_id || entry.id}`;
+      navigator.clipboard?.writeText(fallback);
+    }
     onClose();
   };
 
@@ -200,6 +215,42 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         >
           <Share2 size={15} />
           <span>Copy share link</span>
+        </button>
+
+        {!entry.is_directory && (
+          <button
+            className="adw-sidebar-item"
+            style={{
+              borderRadius: 0,
+              border: "none",
+              background: "none",
+              width: "100%",
+            }}
+            onClick={() => {
+              openVersionHistory(entry);
+              onClose();
+            }}
+          >
+            <History size={15} />
+            <span>Version History</span>
+          </button>
+        )}
+
+        <button
+          className="adw-sidebar-item"
+          style={{
+            borderRadius: 0,
+            border: "none",
+            background: "none",
+            width: "100%",
+          }}
+          onClick={() => {
+            setQuickPreviewOpen(true);
+            onClose();
+          }}
+        >
+          <Eye size={15} />
+          <span>Quick Preview (Space)</span>
         </button>
 
         <div

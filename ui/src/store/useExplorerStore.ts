@@ -55,7 +55,20 @@ interface ExplorerState {
   sortDirection: SortDirection;
   showHidden: boolean;
   searchQuery: string;
+  isGlobalSearch: boolean;
   pendingUploadsCount: number;
+
+  // Dialog & Pane States
+  isDetailsPaneOpen: boolean;
+  isQuickPreviewOpen: boolean;
+  isPreferencesOpen: boolean;
+  isDiagnosticsOpen: boolean;
+  isVersionHistoryOpen: boolean;
+  versionHistoryEntry: EntryRecord | null;
+
+  // Bandwidth & Cache
+  downloadLimitBps: number;
+  uploadLimitBps: number;
 
   // Actions
   loadAccounts: () => Promise<void>;
@@ -88,9 +101,25 @@ interface ExplorerState {
   setSort: (by: SortField) => void;
   toggleShowHidden: () => void;
   setSearchQuery: (query: string) => void;
+  toggleGlobalSearch: () => void;
+  toggleDetailsPane: () => void;
+  setQuickPreviewOpen: (open: boolean) => void;
+  setPreferencesOpen: (open: boolean) => void;
+  setDiagnosticsOpen: (open: boolean) => void;
+  openVersionHistory: (entry: EntryRecord) => void;
+  closeVersionHistory: () => void;
 
   // Cloud & Sync
   connectGoogleDrive: (name?: string) => Promise<void>;
+  addOneDriveAccount: (name?: string) => Promise<void>;
+  addGenericAccount: (
+    providerType: string,
+    name: string,
+    endpoint: string,
+    username?: string,
+    password?: string,
+    bucket?: string
+  ) => Promise<void>;
   toggleAccountOffline: (accountId: string) => Promise<void>;
   refreshQuota: (accountId: string) => Promise<void>;
   refreshSyncStatus: (accountId: string) => Promise<void>;
@@ -98,6 +127,10 @@ interface ExplorerState {
   cancelHydration: (id: string) => Promise<void>;
   pinItem: (id: string) => Promise<void>;
   unpinItem: (id: string) => Promise<void>;
+  getShareLink: (accountId: string, entryId: string) => Promise<string>;
+  freeUpAllCache: () => Promise<number>;
+  setBandwidthLimits: (downloadBps: number, uploadBps: number) => Promise<void>;
+  getBandwidthLimits: () => Promise<void>;
 
   // Operations
   hydrateItem: (id: string) => Promise<void>;
@@ -148,7 +181,18 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
   sortDirection: "asc",
   showHidden: false,
   searchQuery: "",
+  isGlobalSearch: false,
   pendingUploadsCount: 0,
+
+  isDetailsPaneOpen: false,
+  isQuickPreviewOpen: false,
+  isPreferencesOpen: false,
+  isDiagnosticsOpen: false,
+  isVersionHistoryOpen: false,
+  versionHistoryEntry: null,
+
+  downloadLimitBps: 0,
+  uploadLimitBps: 0,
 
   loadAccounts: async () => {
     try {
@@ -167,8 +211,26 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
       sortDirection,
       showHidden,
       searchQuery,
+      isGlobalSearch,
     } = get();
     set({ isLoading: true });
+
+    if (isGlobalSearch && searchQuery.trim()) {
+      try {
+        const results = await invokeCommand<EntryRecord[]>("search_all_accounts", {
+          query: searchQuery.trim(),
+          limit: 200,
+        });
+        set({
+          entries: results || [],
+          totalEntriesCount: results ? results.length : 0,
+          isLoading: false,
+        });
+        return;
+      } catch (err) {
+        console.error("Global search failed", err);
+      }
+    }
 
     try {
       const res = await invokeCommand<{ items: EntryRecord[]; total_count: number }>(
@@ -513,6 +575,35 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
     get().loadEntries();
   },
 
+  toggleGlobalSearch: () => {
+    set((state) => ({ isGlobalSearch: !state.isGlobalSearch }));
+    get().loadEntries();
+  },
+
+  toggleDetailsPane: () => {
+    set((state) => ({ isDetailsPaneOpen: !state.isDetailsPaneOpen }));
+  },
+
+  setQuickPreviewOpen: (open: boolean) => {
+    set({ isQuickPreviewOpen: open });
+  },
+
+  setPreferencesOpen: (open: boolean) => {
+    set({ isPreferencesOpen: open });
+  },
+
+  setDiagnosticsOpen: (open: boolean) => {
+    set({ isDiagnosticsOpen: open });
+  },
+
+  openVersionHistory: (entry: EntryRecord) => {
+    set({ isVersionHistoryOpen: true, versionHistoryEntry: entry });
+  },
+
+  closeVersionHistory: () => {
+    set({ isVersionHistoryOpen: false, versionHistoryEntry: null });
+  },
+
   connectGoogleDrive: async (name?: string) => {
     try {
       await invokeCommand("start_google_oauth", { account_name: name });
@@ -648,6 +739,87 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
       await get().loadEntries();
     } catch (err) {
       console.error("Free up space command failed", err);
+    }
+  },
+
+  addOneDriveAccount: async (name = "OneDrive") => {
+    try {
+      await invokeCommand("add_onedrive_account", { name });
+      await get().loadAccounts();
+    } catch (err) {
+      console.error("Failed to add OneDrive account", err);
+      throw err;
+    }
+  },
+
+  addGenericAccount: async (
+    providerType: string,
+    name: string,
+    endpoint: string,
+    username?: string,
+    password?: string,
+    bucket?: string
+  ) => {
+    try {
+      await invokeCommand("add_generic_account", {
+        provider_type: providerType,
+        name,
+        endpoint,
+        username,
+        password,
+        bucket,
+      });
+      await get().loadAccounts();
+    } catch (err) {
+      console.error("Failed to add generic account", err);
+      throw err;
+    }
+  },
+
+  getShareLink: async (accountId: string, entryId: string) => {
+    try {
+      const link = await invokeCommand<string>("get_share_link", {
+        account_id: accountId,
+        entry_id: entryId,
+      });
+      return link;
+    } catch (err) {
+      console.error("Failed to get share link", err);
+      throw err;
+    }
+  },
+
+  freeUpAllCache: async () => {
+    try {
+      const evicted = await invokeCommand<number>("free_up_all_cache");
+      await get().loadEntries();
+      return evicted;
+    } catch (err) {
+      console.error("Failed to free up all cache", err);
+      return 0;
+    }
+  },
+
+  setBandwidthLimits: async (downloadBps: number, uploadBps: number) => {
+    try {
+      await invokeCommand("set_bandwidth_limits", {
+        download_bps: downloadBps,
+        upload_bps: uploadBps,
+      });
+      set({ downloadLimitBps: downloadBps, uploadLimitBps: uploadBps });
+    } catch (err) {
+      console.error("Failed to set bandwidth limits", err);
+    }
+  },
+
+  getBandwidthLimits: async () => {
+    try {
+      const limits = await invokeCommand<[number, number]>("get_bandwidth_limits");
+      if (limits) {
+        set({ downloadLimitBps: limits[0], uploadLimitBps: limits[1] });
+      }
+    } catch (err) {
+      console.error("Failed to get bandwidth limits", err);
     }
   },
 

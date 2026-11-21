@@ -43,3 +43,13 @@ pub struct ProviderQuota {
     pub used_bytes: u64,
     pub trash_bytes: Option<u64>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileVersion {
+    pub id: String,
+    pub version_id: String,
+    pub size: u64,
+    pub modified_time: i64,
+    pub author: Option<String>,
+    pub download_url: Option<String>,
+}

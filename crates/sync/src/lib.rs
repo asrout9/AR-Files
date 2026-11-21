@@ -1,9 +1,11 @@
+pub mod bandwidth;
 pub mod cache;
 pub mod conflict;
 pub mod engine;
 pub mod hydration;
 pub mod upload_queue;
 
+pub use bandwidth::BandwidthLimiter;
 pub use cache::{CacheManager, CacheStats};
 pub use conflict::ConflictDetector;
 pub use engine::SyncEngine;

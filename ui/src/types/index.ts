@@ -112,3 +112,27 @@ export interface HydrationProgressEvent {
   speed_bps: number;
   state: FileState;
 }
+
+export interface FileVersion {
+  id: string;
+  version_id: string;
+  size: number;
+  modified_time: number;
+  author?: string | null;
+  download_url?: string | null;
+}
+
+export interface DiagnosticsInfo {
+  total_indexed_entries: number;
+  wal_mode_enabled: boolean;
+  active_providers_count: number;
+  download_limit_bps: number;
+  upload_limit_bps: number;
+  total_cache_bytes: number;
+  unresponsive_mounts: string[];
+}
+
+export interface BandwidthLimits {
+  download_bps: number;
+  upload_bps: number;
+}

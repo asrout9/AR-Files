@@ -87,6 +87,18 @@ impl CacheManager {
         Ok(freed_bytes)
     }
 
+    /// Evicts all unpinned cached files from disk, reverting them to CloudOnly placeholders.
+    pub fn free_up_all(&self) -> Result<u64> {
+        let evictable = self.entries_repo.get_evictable_entries(10_000)?;
+        let mut freed = 0u64;
+        for entry in evictable {
+            if let Ok(()) = self.free_up_space(&entry.id) {
+                freed += entry.size;
+            }
+        }
+        Ok(freed)
+    }
+
     /// Calculates cache statistics across all entries.
     pub fn calculate_stats(&self) -> Result<CacheStats> {
         let evictable = self.entries_repo.get_evictable_entries(10_000)?;

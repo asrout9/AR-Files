@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 
-use crate::types::{ByteRange, DeltaFeed, ProviderCapabilities, ProviderQuota};
+use crate::types::{ByteRange, DeltaFeed, FileVersion, ProviderCapabilities, ProviderQuota};
 use cirrus_core::account::ProviderType;
 use cirrus_core::entry::EntryRecord;
 use cirrus_core::error::Result;
@@ -73,4 +73,10 @@ pub trait CloudProvider: Send + Sync {
 
     /// Generates a sharing web URL.
     async fn share_link(&self, id: &str) -> Result<String>;
+
+    /// Fetches version history for an item if supported.
+    async fn versions(&self, id: &str) -> Result<Vec<FileVersion>> {
+        let _ = id;
+        Ok(Vec::new())
+    }
 }

@@ -10,7 +10,9 @@ use tracing::{info, warn};
 use crate::credentials::CredentialsManager;
 use crate::oauth::GoogleOAuthFlow;
 use crate::trait_def::CloudProvider;
-use crate::types::{ByteRange, DeltaChange, DeltaFeed, ProviderCapabilities, ProviderQuota};
+use crate::types::{
+    ByteRange, DeltaChange, DeltaFeed, FileVersion, ProviderCapabilities, ProviderQuota,
+};
 use cirrus_core::account::ProviderType;
 use cirrus_core::entry::EntryRecord;
 use cirrus_core::error::{CirrusError, Result};
@@ -747,5 +749,67 @@ impl CloudProvider for GoogleDriveProvider {
     async fn share_link(&self, id: &str) -> Result<String> {
         let file = self.get_metadata(id).await?;
         Ok(format!("https://drive.google.com/file/d/{}/view", file.id))
+    }
+
+    async fn versions(&self, id: &str) -> Result<Vec<FileVersion>> {
+        let url = format!(
+            "{}/files/{}/revisions?fields=revisions(id,modifiedTime,size,lastModifyingUser(displayName))",
+            GDRIVE_API_BASE, id
+        );
+
+        let resp = self
+            .execute_with_retry(|auth_token| {
+                let req_url = url.clone();
+                let client = self.client.clone();
+                async move { client.get(&req_url).bearer_auth(auth_token).send().await }
+            })
+            .await;
+
+        match resp {
+            Ok(r) => {
+                let val: serde_json::Value = r
+                    .json()
+                    .await
+                    .map_err(|e| CirrusError::Serialization(e.to_string()))?;
+
+                let mut list = Vec::new();
+                if let Some(revisions) = val.get("revisions").and_then(|v| v.as_array()) {
+                    for rev in revisions {
+                        let rev_id = rev
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let size = rev
+                            .get("size")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .unwrap_or(0);
+                        let mtime = rev
+                            .get("modifiedTime")
+                            .and_then(|v| v.as_str())
+                            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                            .map(|dt| dt.timestamp_millis())
+                            .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+                        let author = rev
+                            .get("lastModifyingUser")
+                            .and_then(|u| u.get("displayName"))
+                            .and_then(|d| d.as_str())
+                            .map(|s| s.to_string());
+
+                        list.push(FileVersion {
+                            id: format!("{}_{}", id, rev_id),
+                            version_id: rev_id,
+                            size,
+                            modified_time: mtime,
+                            author,
+                            download_url: None,
+                        });
+                    }
+                }
+                Ok(list)
+            }
+            Err(_) => Ok(Vec::new()),
+        }
     }
 }

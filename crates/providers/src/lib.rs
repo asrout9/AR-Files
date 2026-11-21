@@ -1,16 +1,22 @@
 pub mod credentials;
 pub mod gdrive;
+pub mod generic;
 pub mod mock;
 pub mod oauth;
+pub mod onedrive;
 pub mod trait_def;
 pub mod types;
 
 pub use credentials::CredentialsManager;
 pub use gdrive::GoogleDriveProvider;
+pub use generic::{GenericCloudConfig, GenericCloudProvider};
 pub use mock::MockCloudProvider;
 pub use oauth::{GoogleOAuthFlow, OAuthTokenResponse, PkceChallenge};
+pub use onedrive::OneDriveProvider;
 pub use trait_def::CloudProvider;
-pub use types::{ByteRange, DeltaChange, DeltaFeed, ProviderCapabilities, ProviderQuota};
+pub use types::{
+    ByteRange, DeltaChange, DeltaFeed, FileVersion, ProviderCapabilities, ProviderQuota,
+};
 
 #[cfg(test)]
 mod tests {

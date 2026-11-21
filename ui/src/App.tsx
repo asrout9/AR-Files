@@ -9,6 +9,11 @@ import { PropertiesDialog } from "./components/PropertiesDialog";
 import { BatchRenameDialog } from "./components/BatchRenameDialog";
 import { ConflictDialog, ConflictChoice } from "./components/ConflictDialog";
 import { ProgressPopover, ActiveJob } from "./components/ProgressPopover";
+import { DetailsPane } from "./components/DetailsPane";
+import { QuickPreviewModal } from "./components/QuickPreviewModal";
+import { PreferencesDialog } from "./components/PreferencesDialog";
+import { DiagnosticsDialog } from "./components/DiagnosticsDialog";
+import { VersionHistoryDialog } from "./components/VersionHistoryDialog";
 import { useExplorerStore } from "./store/useExplorerStore";
 import { EntryRecord } from "./types";
 
@@ -27,6 +32,9 @@ export const App: React.FC = () => {
     redoLastOperation,
     compressItems,
     extractArchive,
+    setQuickPreviewOpen,
+    isQuickPreviewOpen,
+    setPreferencesOpen,
   } = useExplorerStore();
 
   const [contextMenuTarget, setContextMenuTarget] = useState<{
@@ -115,6 +123,18 @@ export const App: React.FC = () => {
           if (item) setPropertiesEntry(item);
         }
       }
+      // Space: Quick Preview
+      else if (e.code === "Space" || e.key === " ") {
+        if (selectedIds.size === 1) {
+          e.preventDefault();
+          setQuickPreviewOpen(!isQuickPreviewOpen);
+        }
+      }
+      // Ctrl+,: Preferences
+      else if ((e.ctrlKey || e.metaKey) && e.key === ",") {
+        e.preventDefault();
+        setPreferencesOpen(true);
+      }
     };
 
     window.addEventListener("keydown", handleGlobalShortcuts);
@@ -126,6 +146,9 @@ export const App: React.FC = () => {
     redoLastOperation,
     trashSelected,
     deletePermanently,
+    isQuickPreviewOpen,
+    setQuickPreviewOpen,
+    setPreferencesOpen,
   ]);
 
   const showToast = (message: string, withUndo = false) => {
@@ -264,6 +287,9 @@ export const App: React.FC = () => {
             )}
           </main>
         </div>
+
+        {/* Collapsible Details & Properties Right Pane */}
+        <DetailsPane />
       </div>
 
       {/* Floating Operations Progress Popover */}
@@ -415,6 +441,18 @@ export const App: React.FC = () => {
           onCancel={() => setConflictData(null)}
         />
       )}
+
+      {/* Quick Preview Spacebar Overlay */}
+      <QuickPreviewModal />
+
+      {/* Preferences Dialog */}
+      <PreferencesDialog />
+
+      {/* Diagnostics Dialog */}
+      <DiagnosticsDialog />
+
+      {/* Version History Dialog */}
+      <VersionHistoryDialog />
     </div>
   );
 };

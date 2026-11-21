@@ -464,3 +464,184 @@ pub async fn stat_local_file(
 ) -> Result<cirrus_platform::LocalFileMetadata> {
     state.hangproof_fs.stat_hangproof(&path).await
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosticsInfo {
+    pub total_indexed_entries: usize,
+    pub accounts_count: usize,
+    pub cache_total_bytes: u64,
+    pub cache_evictable_bytes: u64,
+    pub download_bandwidth_limit_bps: u64,
+    pub upload_bandwidth_limit_bps: u64,
+    pub pending_uploads_count: usize,
+    pub active_providers: Vec<String>,
+}
+
+pub async fn search_all_accounts(
+    state: &AppState,
+    search_term: String,
+    limit: usize,
+) -> Result<Vec<EntryRecord>> {
+    state.entries_repo.search_fts(&search_term, limit)
+}
+
+pub async fn get_file_versions(
+    state: &AppState,
+    account_id: String,
+    entry_id: String,
+) -> Result<Vec<cirrus_providers::FileVersion>> {
+    let provider_opt = state.providers.read().get(&account_id).cloned();
+    if let Some(provider) = provider_opt {
+        provider.versions(&entry_id).await
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+pub async fn get_share_link(
+    state: &AppState,
+    account_id: String,
+    entry_id: String,
+) -> Result<String> {
+    let provider_opt = state.providers.read().get(&account_id).cloned();
+    let provider = provider_opt.ok_or_else(|| cirrus_core::error::CirrusError::NotFound {
+        entity: "Provider".to_string(),
+        id: account_id.clone(),
+    })?;
+
+    provider.share_link(&entry_id).await
+}
+
+pub async fn free_up_all_cache(state: &AppState) -> Result<u64> {
+    state.cache_mgr.free_up_all()
+}
+
+pub async fn set_bandwidth_limits(
+    state: &AppState,
+    download_bps: u64,
+    upload_bps: u64,
+) -> Result<()> {
+    state.download_limiter.set_limit(download_bps);
+    state.upload_limiter.set_limit(upload_bps);
+    let _ = state
+        .settings_repo
+        .set_string("download_limit_bps", &download_bps.to_string());
+    let _ = state
+        .settings_repo
+        .set_string("upload_limit_bps", &upload_bps.to_string());
+    Ok(())
+}
+
+pub async fn get_bandwidth_limits(state: &AppState) -> Result<(u64, u64)> {
+    Ok((
+        state.download_limiter.get_limit(),
+        state.upload_limiter.get_limit(),
+    ))
+}
+
+pub async fn get_diagnostics(state: &AppState) -> Result<DiagnosticsInfo> {
+    let accounts = state.accounts_repo.list_accounts()?;
+    let cache_stats = state
+        .cache_mgr
+        .calculate_stats()
+        .unwrap_or(cirrus_sync::CacheStats {
+            total_cached_bytes: 0,
+            evictable_bytes: 0,
+            pinned_bytes: 0,
+        });
+
+    let providers_list: Vec<String> = state.providers.read().keys().cloned().collect();
+    let mut pending_uploads = 0;
+    for q in state.upload_queues.read().values() {
+        pending_uploads += q.pending_count();
+    }
+
+    Ok(DiagnosticsInfo {
+        total_indexed_entries: state
+            .entries_repo
+            .search_fts("", 100_000)
+            .map(|v| v.len())
+            .unwrap_or(0),
+        accounts_count: accounts.len(),
+        cache_total_bytes: cache_stats.total_cached_bytes,
+        cache_evictable_bytes: cache_stats.evictable_bytes,
+        download_bandwidth_limit_bps: state.download_limiter.get_limit(),
+        upload_bandwidth_limit_bps: state.upload_limiter.get_limit(),
+        pending_uploads_count: pending_uploads,
+        active_providers: providers_list,
+    })
+}
+
+pub async fn generate_thumbnail(state: &AppState, path: String) -> Result<Option<String>> {
+    let p = std::path::Path::new(&path);
+    if let Some(cached) = state
+        .thumbnail_mgr
+        .get_cached_thumbnail(p, cirrus_platform::ThumbnailSize::Normal)
+    {
+        return Ok(Some(cached.to_string_lossy().to_string()));
+    }
+    Ok(None)
+}
+
+pub async fn add_onedrive_account(state: &AppState, name: String) -> Result<AccountRecord> {
+    let acc_id = format!("acc_onedrive_{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let provider = Arc::new(cirrus_providers::OneDriveProvider::new(
+        &acc_id,
+        &name,
+        state.credentials_mgr.clone(),
+    ));
+
+    let now = chrono::Utc::now().timestamp();
+    let account = AccountRecord {
+        id: acc_id.clone(),
+        provider_type: cirrus_core::account::ProviderType::OneDrive,
+        name: name.clone(),
+        email: None,
+        root_folder_id: Some("root".to_string()),
+        quota_total: Some(1024 * 1024 * 1024 * 1024), // 1 TB
+        quota_used: Some(0),
+        sync_status: cirrus_core::account::AccountSyncStatus::Idle,
+        delta_token: None,
+        mount_path: None,
+        created_at: now,
+        updated_at: now,
+    };
+
+    state.accounts_repo.upsert_account(&account)?;
+    state.register_cloud_account(&acc_id, provider);
+    Ok(account)
+}
+
+pub async fn add_generic_account(
+    state: &AppState,
+    name: String,
+    config: cirrus_providers::GenericCloudConfig,
+) -> Result<AccountRecord> {
+    let acc_id = format!("acc_generic_{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let provider = Arc::new(cirrus_providers::GenericCloudProvider::new(
+        &acc_id,
+        &name,
+        config,
+        state.credentials_mgr.clone(),
+    ));
+
+    let now = chrono::Utc::now().timestamp();
+    let account = AccountRecord {
+        id: acc_id.clone(),
+        provider_type: provider.provider_type(),
+        name: name.clone(),
+        email: None,
+        root_folder_id: None,
+        quota_total: Some(100 * 1024 * 1024 * 1024),
+        quota_used: Some(0),
+        sync_status: cirrus_core::account::AccountSyncStatus::Idle,
+        delta_token: None,
+        mount_path: None,
+        created_at: now,
+        updated_at: now,
+    };
+
+    state.accounts_repo.upsert_account(&account)?;
+    state.register_cloud_account(&acc_id, provider);
+    Ok(account)
+}

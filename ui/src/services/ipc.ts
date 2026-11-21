@@ -250,6 +250,143 @@ async function handleMockCommand<T>(cmd: string, args: Record<string, unknown>):
       return entry as unknown as T;
     }
 
+    case "pin_item": {
+      const id = args.id as string;
+      const entry = mockEntries.find((e) => e.id === id);
+      if (entry) {
+        entry.state = "pinned";
+      }
+      return true as unknown as T;
+    }
+
+    case "unpin_item": {
+      const id = args.id as string;
+      const entry = mockEntries.find((e) => e.id === id);
+      if (entry) {
+        entry.state = "available";
+      }
+      return true as unknown as T;
+    }
+
+    case "search_all_accounts": {
+      const query = ((args.query as string) || "").toLowerCase();
+      const limit = (args.limit as number) || 50;
+      const results = mockEntries
+        .filter((e) => e.name.toLowerCase().includes(query))
+        .slice(0, limit);
+      return results as unknown as T;
+    }
+
+    case "get_file_versions": {
+      const entryId = args.entry_id as string;
+      const entry = mockEntries.find((e) => e.id === entryId);
+      const versions = [
+        {
+          id: entryId,
+          version_id: "v3",
+          size: entry ? entry.size : 1024,
+          modified_time: Date.now() - 3600000,
+          author: "Current User",
+          download_url: "https://cloud.provider.mock/v3",
+        },
+        {
+          id: entryId,
+          version_id: "v2",
+          size: entry ? Math.round(entry.size * 0.9) : 900,
+          modified_time: Date.now() - 86400000,
+          author: "Current User",
+          download_url: "https://cloud.provider.mock/v2",
+        },
+        {
+          id: entryId,
+          version_id: "v1",
+          size: entry ? Math.round(entry.size * 0.75) : 750,
+          modified_time: Date.now() - 172800000,
+          author: "Alice Cooper",
+          download_url: "https://cloud.provider.mock/v1",
+        },
+      ];
+      return versions as unknown as T;
+    }
+
+    case "get_share_link": {
+      const entryId = args.entry_id as string;
+      return `https://files.cirrus.local/share/${entryId}` as unknown as T;
+    }
+
+    case "free_up_all_cache": {
+      let evictedCount = 0;
+      for (const entry of mockEntries) {
+        if (entry.state === "available") {
+          entry.state = "cloud_only";
+          entry.local_path = null;
+          evictedCount++;
+        }
+      }
+      return evictedCount as unknown as T;
+    }
+
+    case "set_bandwidth_limits": {
+      return true as unknown as T;
+    }
+
+    case "get_bandwidth_limits": {
+      return [0, 0] as unknown as T;
+    }
+
+    case "get_diagnostics": {
+      return {
+        total_indexed_entries: mockEntries.length,
+        wal_mode_enabled: true,
+        active_providers_count: mockAccounts.length,
+        download_limit_bps: 0,
+        upload_limit_bps: 0,
+        total_cache_bytes: 52428800, // 50 MB
+        unresponsive_mounts: [],
+      } as unknown as T;
+    }
+
+    case "generate_thumbnail": {
+      return null as unknown as T;
+    }
+
+    case "add_onedrive_account": {
+      const name = (args.name as string) || "OneDrive";
+      const newAcc: AccountRecord = {
+        id: `acc_onedrive_${Date.now()}`,
+        provider_type: "onedrive",
+        name,
+        email: "user@live.com",
+        root_folder_id: "root_onedrive",
+        quota_total: 1024 * 1024 * 1024 * 1024,
+        quota_used: 120 * 1024 * 1024 * 1024,
+        sync_status: "idle",
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      };
+      mockAccounts.push(newAcc);
+      return newAcc as unknown as T;
+    }
+
+    case "add_generic_account": {
+      const ptype = (args.provider_type as string) || "webdav";
+      const name = (args.name as string) || "Nextcloud";
+      const newAcc: AccountRecord = {
+        id: `acc_generic_${Date.now()}`,
+        provider_type: ptype,
+        name,
+        email: null,
+        root_folder_id: "root_generic",
+        quota_total: 500 * 1024 * 1024 * 1024,
+        quota_used: 45 * 1024 * 1024 * 1024,
+        sync_status: "idle",
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      };
+      mockAccounts.push(newAcc);
+      return newAcc as unknown as T;
+    }
+
     default:
       return null as unknown as T;
   }

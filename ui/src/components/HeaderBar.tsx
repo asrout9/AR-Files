@@ -13,6 +13,11 @@ import {
   ArrowUpDown,
   RefreshCw,
   CloudOff,
+  Info,
+  MoreVertical,
+  Sliders,
+  Activity,
+  Globe,
 } from "lucide-react";
 import { useExplorerStore } from "../store/useExplorerStore";
 import { SortField } from "../types";
@@ -43,6 +48,12 @@ export const HeaderBar: React.FC = () => {
     selectAll,
     accounts,
     pendingUploadsCount,
+    isDetailsPaneOpen,
+    toggleDetailsPane,
+    isGlobalSearch,
+    toggleGlobalSearch,
+    setPreferencesOpen,
+    setDiagnosticsOpen,
   } = useExplorerStore();
 
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -51,6 +62,7 @@ export const HeaderBar: React.FC = () => {
   const [isEditingPath, setIsEditingPath] = useState(false);
   const [pathInput, setPathInput] = useState("");
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   const pathInputRef = useRef<HTMLInputElement>(null);
 
@@ -109,6 +121,21 @@ export const HeaderBar: React.FC = () => {
         e.preventDefault();
         goForward();
       }
+      // Ctrl+I: Toggle Details Pane
+      else if ((e.ctrlKey || e.metaKey) && (e.key === "i" || e.key === "I")) {
+        e.preventDefault();
+        toggleDetailsPane();
+      }
+      // Ctrl+,: Preferences
+      else if ((e.ctrlKey || e.metaKey) && e.key === ",") {
+        e.preventDefault();
+        setPreferencesOpen(true);
+      }
+      // Ctrl+Shift+D: Diagnostics
+      else if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "d" || e.key === "D")) {
+        e.preventDefault();
+        setDiagnosticsOpen(true);
+      }
     };
 
     window.addEventListener("keydown", handleKeyDown);
@@ -124,6 +151,9 @@ export const HeaderBar: React.FC = () => {
     goUp,
     goBack,
     goForward,
+    toggleDetailsPane,
+    setPreferencesOpen,
+    setDiagnosticsOpen,
   ]);
 
   const handleCreateFolderSubmit = (e: React.FormEvent) => {
@@ -242,44 +272,56 @@ export const HeaderBar: React.FC = () => {
               display: "flex",
               alignItems: "center",
               position: "relative",
+              gap: 6,
             }}
           >
-            <input
-              type="text"
-              autoFocus
-              className="adw-crumb"
-              style={{
-                width: 260,
-                height: 32,
-                border: "1px solid var(--border-color)",
-                background: "var(--card-bg)",
-                paddingLeft: 28,
-              }}
-              placeholder="Search current folder..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-            <Search
-              size={14}
-              style={{ position: "absolute", left: 8, color: "var(--dim-fg)" }}
-            />
             <button
-              className="adw-btn adw-btn-icon"
-              style={{
-                position: "absolute",
-                right: 4,
-                width: 20,
-                height: 20,
-                padding: 0,
-                border: "none",
-              }}
-              onClick={() => {
-                setSearchQuery("");
-                setIsSearchOpen(false);
-              }}
+              className={`adw-btn adw-btn-icon ${isGlobalSearch ? "adw-btn-accent" : ""}`}
+              onClick={toggleGlobalSearch}
+              title={isGlobalSearch ? "Searching all accounts (FTS5) - click for current folder" : "Searching current folder - click for all accounts (FTS5)"}
+              style={{ width: 28, height: 28, padding: 0 }}
             >
-              <X size={12} />
+              <Globe size={14} />
             </button>
+            <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+              <input
+                type="text"
+                autoFocus
+                className="adw-crumb"
+                style={{
+                  width: 270,
+                  height: 32,
+                  border: "1px solid var(--border-color)",
+                  background: "var(--card-bg)",
+                  paddingLeft: 28,
+                  paddingRight: 26,
+                }}
+                placeholder={isGlobalSearch ? "Search all accounts (FTS5)..." : "Search current folder..."}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+              <Search
+                size={14}
+                style={{ position: "absolute", left: 8, color: "var(--dim-fg)" }}
+              />
+              <button
+                className="adw-btn adw-btn-icon"
+                style={{
+                  position: "absolute",
+                  right: 4,
+                  width: 20,
+                  height: 20,
+                  padding: 0,
+                  border: "none",
+                }}
+                onClick={() => {
+                  setSearchQuery("");
+                  setIsSearchOpen(false);
+                }}
+              >
+                <X size={12} />
+              </button>
+            </div>
           </div>
         ) : null}
       </div>
@@ -460,6 +502,117 @@ export const HeaderBar: React.FC = () => {
         >
           <FolderPlus size={16} />
         </button>
+
+        {/* Details Pane Toggle */}
+        <button
+          className={`adw-btn adw-btn-icon ${isDetailsPaneOpen ? "adw-btn-accent" : ""}`}
+          onClick={toggleDetailsPane}
+          title="Toggle Properties & Details (Ctrl+I)"
+        >
+          <Info size={16} />
+        </button>
+
+        {/* More Menu */}
+        <div style={{ position: "relative" }}>
+          <button
+            className={`adw-btn adw-btn-icon ${isMenuOpen ? "adw-btn-accent" : ""}`}
+            onClick={() => setIsMenuOpen((prev) => !prev)}
+            title="Menu"
+          >
+            <MoreVertical size={16} />
+          </button>
+
+          {isMenuOpen && (
+            <>
+              <div
+                style={{
+                  position: "fixed",
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  zIndex: 998,
+                }}
+                onClick={() => setIsMenuOpen(false)}
+              />
+              <div
+                style={{
+                  position: "absolute",
+                  top: 36,
+                  right: 0,
+                  backgroundColor: "var(--popover-bg)",
+                  borderRadius: "var(--adw-radius-m)",
+                  boxShadow: "var(--popover-shadow)",
+                  border: "1px solid var(--border-color)",
+                  padding: "6px 0",
+                  minWidth: 220,
+                  zIndex: 999,
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+              >
+                <button
+                  className="adw-sidebar-item"
+                  style={{
+                    borderRadius: 0,
+                    border: "none",
+                    background: "none",
+                    width: "100%",
+                  }}
+                  onClick={() => {
+                    setPreferencesOpen(true);
+                    setIsMenuOpen(false);
+                  }}
+                >
+                  <Sliders size={15} />
+                  <span>Preferences (Ctrl+,)</span>
+                </button>
+
+                <button
+                  className="adw-sidebar-item"
+                  style={{
+                    borderRadius: 0,
+                    border: "none",
+                    background: "none",
+                    width: "100%",
+                  }}
+                  onClick={() => {
+                    setDiagnosticsOpen(true);
+                    setIsMenuOpen(false);
+                  }}
+                >
+                  <Activity size={15} />
+                  <span>Diagnostics & Health (Ctrl+Shift+D)</span>
+                </button>
+
+                <div
+                  style={{
+                    height: 1,
+                    backgroundColor: "var(--border-color)",
+                    margin: "4px 0",
+                  }}
+                />
+
+                <button
+                  className="adw-sidebar-item"
+                  style={{
+                    borderRadius: 0,
+                    border: "none",
+                    background: "none",
+                    width: "100%",
+                  }}
+                  onClick={() => {
+                    toggleGlobalSearch();
+                    setIsMenuOpen(false);
+                  }}
+                >
+                  <Globe size={15} color={isGlobalSearch ? "var(--active-accent)" : undefined} />
+                  <span>{isGlobalSearch ? "✓ Search All Accounts (FTS5)" : "Search All Accounts (FTS5)"}</span>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
 
         {/* Window Controls (GNOME libadwaita layout: close on right) */}
         <div style={{ display: "flex", gap: 6, marginLeft: 12 }}>
