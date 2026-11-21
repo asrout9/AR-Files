@@ -1,0 +1,427 @@
+/* Libadwaita Design Language CSS Tokens */
+:root {
+  --adw-font-sans: system-ui, -apple-system, "Cantarell", "Adwaita Sans", "Ubuntu", sans-serif;
+  --adw-font-mono: "Source Code Pro", "Liberation Mono", monospace;
+
+  /* Sizing and Radii */
+  --adw-radius-s: 6px;
+  --adw-radius-m: 9px;
+  --adw-radius-l: 12px;
+  --adw-radius-xl: 16px;
+
+  /* Accent Colors */
+  --adw-accent-blue: #3584e4;
+  --adw-accent-teal: #2190a4;
+  --adw-accent-green: #3a944a;
+  --adw-accent-yellow: #e5a50a;
+  --adw-accent-orange: #e66100;
+  --adw-accent-red: #c01c28;
+  --adw-accent-purple: #9141ac;
+  --adw-accent-pink: #d56199;
+
+  /* State Overlay Colors */
+  --state-cloud: #3584e4;
+  --state-hydrating: #1c71d8;
+  --state-available: #33d17a;
+  --state-pinned: #2ec27e;
+  --state-syncing: #e5a50a;
+  --state-conflict: #f5c211;
+  --state-error: #e01b24;
+
+  /* Transitions */
+  --adw-transition: all 150ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+/* Light Theme (Default) */
+[data-theme="light"], :root {
+  --window-bg: #fafafa;
+  --window-fg: rgba(0, 0, 0, 0.85);
+  --headerbar-bg: #ebebeb;
+  --headerbar-fg: rgba(0, 0, 0, 0.85);
+  --sidebar-bg: #f4f4f4;
+  --sidebar-fg: rgba(0, 0, 0, 0.8);
+  --view-bg: #ffffff;
+  --card-bg: #ffffff;
+  --border-color: rgba(0, 0, 0, 0.1);
+  --hover-bg: rgba(0, 0, 0, 0.05);
+  --selected-bg: rgba(53, 132, 228, 0.15);
+  --selected-fg: #1c71d8;
+  --popover-bg: #ffffff;
+  --popover-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  --dim-fg: rgba(0, 0, 0, 0.5);
+  --active-accent: var(--adw-accent-blue);
+}
+
+/* Dark Theme */
+[data-theme="dark"] {
+  --window-bg: #242424;
+  --window-fg: #ffffff;
+  --headerbar-bg: #303030;
+  --headerbar-fg: #ffffff;
+  --sidebar-bg: #282828;
+  --sidebar-fg: #eeeeee;
+  --view-bg: #1e1e1e;
+  --card-bg: #303030;
+  --border-color: rgba(255, 255, 255, 0.08);
+  --hover-bg: rgba(255, 255, 255, 0.08);
+  --selected-bg: rgba(53, 132, 228, 0.3);
+  --selected-fg: #78aeed;
+  --popover-bg: #323232;
+  --popover-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+  --dim-fg: rgba(255, 255, 255, 0.55);
+  --active-accent: var(--adw-accent-blue);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --window-bg: #242424;
+    --window-fg: #ffffff;
+    --headerbar-bg: #303030;
+    --headerbar-fg: #ffffff;
+    --sidebar-bg: #282828;
+    --sidebar-fg: #eeeeee;
+    --view-bg: #1e1e1e;
+    --card-bg: #303030;
+    --border-color: rgba(255, 255, 255, 0.08);
+    --hover-bg: rgba(255, 255, 255, 0.08);
+    --selected-bg: rgba(53, 132, 228, 0.3);
+    --selected-fg: #78aeed;
+    --popover-bg: #323232;
+    --popover-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+    --dim-fg: rgba(255, 255, 255, 0.55);
+    --active-accent: var(--adw-accent-blue);
+  }
+}
+
+/* Reset and Global Styles */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body {
+  font-family: var(--adw-font-sans);
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--window-fg);
+  background-color: var(--window-bg);
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* HeaderBar (Nautilus style) */
+.adw-headerbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 48px;
+  padding: 0 12px;
+  background-color: var(--headerbar-bg);
+  border-bottom: 1px solid var(--border-color);
+  -webkit-app-region: drag;
+}
+
+.adw-headerbar-left,
+.adw-headerbar-center,
+.adw-headerbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  -webkit-app-region: no-drag;
+}
+
+/* Path Bar & Breadcrumbs */
+.adw-pathbar {
+  display: flex;
+  align-items: center;
+  background-color: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--adw-radius-s);
+  padding: 2px 6px;
+  height: 32px;
+  gap: 2px;
+}
+
+.adw-crumb {
+  display: flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--adw-radius-s);
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--window-fg);
+  transition: var(--adw-transition);
+}
+
+.adw-crumb:hover {
+  background-color: var(--hover-bg);
+}
+
+.adw-crumb-sep {
+  color: var(--dim-fg);
+  font-size: 12px;
+}
+
+/* Buttons */
+.adw-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0 10px;
+  background-color: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--adw-radius-s);
+  color: var(--window-fg);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  transition: var(--adw-transition);
+}
+
+.adw-btn:hover {
+  background-color: var(--hover-bg);
+}
+
+.adw-btn-icon {
+  width: 32px;
+  padding: 0;
+}
+
+.adw-btn-accent {
+  background-color: var(--active-accent);
+  color: #ffffff;
+  border-color: transparent;
+}
+
+.adw-btn-accent:hover {
+  opacity: 0.9;
+}
+
+/* Window Layout */
+.adw-window-container {
+  display: flex;
+  height: calc(100vh - 48px);
+  width: 100vw;
+  overflow: hidden;
+}
+
+/* Sidebar */
+.adw-sidebar {
+  width: 240px;
+  min-width: 200px;
+  max-width: 340px;
+  background-color: var(--sidebar-bg);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  padding: 10px 8px;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+.adw-sidebar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.adw-sidebar-heading {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--dim-fg);
+  padding: 6px 10px 4px 10px;
+  letter-spacing: 0.5px;
+}
+
+.adw-sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--adw-radius-s);
+  cursor: pointer;
+  color: var(--sidebar-fg);
+  font-weight: 500;
+  transition: var(--adw-transition);
+}
+
+.adw-sidebar-item:hover {
+  background-color: var(--hover-bg);
+}
+
+.adw-sidebar-item.active {
+  background-color: var(--selected-bg);
+  color: var(--selected-fg);
+  font-weight: 600;
+}
+
+/* Main Viewport */
+.adw-viewport {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--view-bg);
+  overflow: hidden;
+}
+
+/* List Table View */
+.adw-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.adw-table-header {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--view-bg);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dim-fg);
+  padding: 0 16px;
+}
+
+.adw-table-row {
+  display: flex;
+  align-items: center;
+  height: 38px;
+  padding: 0 16px;
+  border-bottom: 1px solid transparent;
+  cursor: pointer;
+  border-radius: var(--adw-radius-s);
+  margin: 1px 6px;
+  transition: background-color 75ms ease;
+}
+
+.adw-table-row:hover {
+  background-color: var(--hover-bg);
+}
+
+.adw-table-row.selected {
+  background-color: var(--selected-bg);
+  color: var(--selected-fg);
+}
+
+/* Grid View */
+.adw-grid-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 16px;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.adw-grid-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 8px;
+  border-radius: var(--adw-radius-m);
+  cursor: pointer;
+  text-align: center;
+  transition: var(--adw-transition);
+  position: relative;
+}
+
+.adw-grid-item:hover {
+  background-color: var(--hover-bg);
+}
+
+.adw-grid-item.selected {
+  background-color: var(--selected-bg);
+  color: var(--selected-fg);
+}
+
+.adw-grid-label {
+  margin-top: 8px;
+  font-size: 12px;
+  word-break: break-word;
+  max-width: 100%;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* State Badge Icon Overlays */
+.adw-state-overlay {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--card-bg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.adw-state-cloud_only {
+  color: var(--state-cloud);
+}
+
+.adw-state-hydrating {
+  color: var(--state-hydrating);
+}
+
+.adw-state-available {
+  color: var(--state-available);
+}
+
+.adw-state-pinned {
+  color: var(--state-pinned);
+}
+
+.adw-state-syncing_up {
+  color: var(--state-syncing);
+}
+
+.adw-state-conflict {
+  color: var(--state-conflict);
+}
+
+.adw-state-error {
+  color: var(--state-error);
+}
+
+/* Toasts and Operations Popover */
+.adw-toast-container {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.adw-toast {
+  background-color: #2e3436;
+  color: #eeeeec;
+  padding: 8px 16px;
+  border-radius: var(--adw-radius-xl);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
