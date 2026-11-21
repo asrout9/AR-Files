@@ -8,6 +8,7 @@ import {
   AlertTriangle,
   AlertCircle,
   Loader2,
+  Minus,
 } from "lucide-react";
 
 interface StateIconProps {
@@ -63,6 +64,13 @@ export const StateIcon: React.FC<StateIconProps> = ({ state, size = 14 }) => {
       return (
         <span className="adw-state-overlay adw-state-error" title="Sync error">
           <AlertCircle size={size} />
+        </span>
+      );
+
+    case "excluded":
+      return (
+        <span className="adw-state-overlay adw-state-excluded" title="Excluded from sync">
+          <Minus size={size} />
         </span>
       );
 

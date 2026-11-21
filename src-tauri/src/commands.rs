@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::state::AppState;
 use cirrus_core::account::AccountRecord;
@@ -7,6 +8,7 @@ use cirrus_core::error::Result;
 use cirrus_core::query::{FolderListingQuery, PagedResult};
 use cirrus_ops::CollisionResolution;
 use cirrus_platform::DesktopEntry;
+use cirrus_providers::CloudProvider;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CommandResponse<T> {
@@ -157,14 +159,51 @@ pub fn get_default_app(state: &AppState, mime_type: &str) -> Option<DesktopEntry
     state.desktop_mgr.get_default_app(mime_type).cloned()
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncStatusInfo {
+    pub account_id: String,
+    pub sync_status: String,
+    pub is_offline: bool,
+    pub pending_uploads_count: usize,
+    pub quota_total: Option<u64>,
+    pub quota_used: Option<u64>,
+}
+
 pub async fn free_up_space(state: &AppState, entry_id: String) -> Result<()> {
     state.cache_mgr.free_up_space(&entry_id)
 }
 
 pub async fn pin_entry(state: &AppState, entry_id: String) -> Result<()> {
-    state
-        .entries_repo
-        .update_state(&entry_id, cirrus_core::state::FileState::Pinned, None, None)
+    state.entries_repo.update_state(
+        &entry_id,
+        cirrus_core::state::FileState::Pinned,
+        None,
+        None,
+    )?;
+
+    // Trigger background hydration if not hydrated
+    if let Ok(Some(entry)) = state.entries_repo.get_entry(&entry_id) {
+        if entry.state == cirrus_core::state::FileState::Pinned && entry.local_path.is_none() {
+            let provider_opt = state.providers.read().get(&entry.account_id).cloned();
+            let hydration_mgr = state.hydration_mgr.clone();
+            tokio::spawn(async move {
+                if let Some(provider) = provider_opt {
+                    let _ = hydration_mgr
+                        .hydrate_with_provider(
+                            &entry,
+                            cirrus_sync::HydrationPriority::Pinned,
+                            provider,
+                        )
+                        .await;
+                } else {
+                    let _ = hydration_mgr
+                        .hydrate(&entry, cirrus_sync::HydrationPriority::Pinned)
+                        .await;
+                }
+            });
+        }
+    }
+    Ok(())
 }
 
 pub async fn unpin_entry(state: &AppState, entry_id: String) -> Result<()> {
@@ -174,6 +213,228 @@ pub async fn unpin_entry(state: &AppState, entry_id: String) -> Result<()> {
         None,
         None,
     )
+}
+
+pub async fn hydrate_entry(state: &AppState, entry_id: String) -> Result<String> {
+    let entry = state.entries_repo.get_entry(&entry_id)?.ok_or_else(|| {
+        cirrus_core::error::CirrusError::NotFound {
+            entity: "Entry".to_string(),
+            id: entry_id.clone(),
+        }
+    })?;
+
+    if let Some(ref path) = entry.local_path {
+        let p = std::path::Path::new(path);
+        if p.exists() {
+            return Ok(path.clone());
+        }
+    }
+
+    let provider_opt = state.providers.read().get(&entry.account_id).cloned();
+    let local_path = if let Some(provider) = provider_opt {
+        state
+            .hydration_mgr
+            .hydrate_with_provider(
+                &entry,
+                cirrus_sync::HydrationPriority::UserInteractive,
+                provider,
+            )
+            .await?
+    } else {
+        state
+            .hydration_mgr
+            .hydrate(&entry, cirrus_sync::HydrationPriority::UserInteractive)
+            .await?
+    };
+
+    Ok(local_path.to_string_lossy().to_string())
+}
+
+pub async fn cancel_hydration(state: &AppState, entry_id: String) -> Result<()> {
+    state.hydration_mgr.cancel(&entry_id);
+    Ok(())
+}
+
+pub async fn start_google_oauth(
+    state: &AppState,
+    account_name: Option<String>,
+) -> Result<AccountRecord> {
+    let acc_id = format!("acc_gdrive_{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let name = account_name.unwrap_or_else(|| "Google Drive".to_string());
+
+    let oauth_flow = cirrus_providers::GoogleOAuthFlow::new(state.credentials_mgr.clone());
+    let _token_resp = oauth_flow.execute_flow(&acc_id).await?;
+
+    let gdrive_provider = Arc::new(cirrus_providers::GoogleDriveProvider::new(
+        &acc_id,
+        &name,
+        state.credentials_mgr.clone(),
+    ));
+
+    // Fetch initial quota
+    let quota = gdrive_provider
+        .quota()
+        .await
+        .unwrap_or(cirrus_providers::ProviderQuota {
+            total_bytes: 15 * 1024 * 1024 * 1024,
+            used_bytes: 0,
+            trash_bytes: None,
+        });
+
+    let now = chrono::Utc::now().timestamp();
+    let account = AccountRecord {
+        id: acc_id.clone(),
+        provider_type: cirrus_core::account::ProviderType::GoogleDrive,
+        name: name.clone(),
+        email: None,
+        root_folder_id: Some("root".to_string()),
+        quota_total: Some(quota.total_bytes),
+        quota_used: Some(quota.used_bytes),
+        sync_status: cirrus_core::account::AccountSyncStatus::Indexing,
+        delta_token: None,
+        mount_path: None,
+        created_at: now,
+        updated_at: now,
+    };
+
+    state.accounts_repo.upsert_account(&account)?;
+    state.register_cloud_account(&acc_id, gdrive_provider.clone());
+
+    // Spawn background initial scan
+    let engine_opt = state.sync_engines.read().get(&acc_id).cloned();
+    if let Some(engine) = engine_opt {
+        tokio::spawn(async move {
+            let _ = engine.run_initial_scan(None).await;
+        });
+    }
+
+    Ok(account)
+}
+
+pub async fn get_account_quota(
+    state: &AppState,
+    account_id: String,
+) -> Result<cirrus_providers::ProviderQuota> {
+    let provider_opt = state.providers.read().get(&account_id).cloned();
+    let provider = provider_opt.ok_or_else(|| cirrus_core::error::CirrusError::NotFound {
+        entity: "Provider".to_string(),
+        id: account_id.clone(),
+    })?;
+
+    let quota = provider.quota().await?;
+    let _ =
+        state
+            .accounts_repo
+            .update_account_quota(&account_id, quota.total_bytes, quota.used_bytes);
+    Ok(quota)
+}
+
+pub async fn set_offline_mode(state: &AppState, account_id: String, offline: bool) -> Result<()> {
+    if let Some(queue) = state.upload_queues.read().get(&account_id) {
+        queue.set_offline(offline);
+    }
+
+    let status = if offline {
+        cirrus_core::account::AccountSyncStatus::Offline
+    } else {
+        cirrus_core::account::AccountSyncStatus::Idle
+    };
+
+    state
+        .accounts_repo
+        .update_sync_status(&account_id, status, None)?;
+    Ok(())
+}
+
+pub async fn get_sync_status(state: &AppState, account_id: String) -> Result<SyncStatusInfo> {
+    let account = state
+        .accounts_repo
+        .get_account(&account_id)?
+        .ok_or_else(|| cirrus_core::error::CirrusError::NotFound {
+            entity: "Account".to_string(),
+            id: account_id.clone(),
+        })?;
+
+    let is_offline = account.sync_status == cirrus_core::account::AccountSyncStatus::Offline;
+    let pending_uploads = state
+        .upload_queues
+        .read()
+        .get(&account_id)
+        .map(|q| q.pending_count())
+        .unwrap_or(0);
+
+    Ok(SyncStatusInfo {
+        account_id,
+        sync_status: account.sync_status.as_str().to_string(),
+        is_offline,
+        pending_uploads_count: pending_uploads,
+        quota_total: account.quota_total,
+        quota_used: account.quota_used,
+    })
+}
+
+pub async fn queue_upload(
+    state: &AppState,
+    account_id: String,
+    parent_id: Option<String>,
+    local_path: String,
+) -> Result<cirrus_sync::UploadItem> {
+    let queue_opt = state.upload_queues.read().get(&account_id).cloned();
+    let queue = queue_opt.ok_or_else(|| cirrus_core::error::CirrusError::NotFound {
+        entity: "UploadQueue".to_string(),
+        id: account_id.clone(),
+    })?;
+
+    let path = std::path::Path::new(&local_path);
+    let name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "file.dat".to_string());
+
+    let item = queue.enqueue(
+        None,
+        parent_id.as_deref(),
+        &name,
+        path,
+        "application/octet-stream",
+    )?;
+
+    // If online, kick off queue processor
+    if !queue.is_offline() {
+        if let Some(provider) = state.providers.read().get(&account_id).cloned() {
+            let q = queue.clone();
+            tokio::spawn(async move {
+                let _ = q.process_next(provider).await;
+            });
+        }
+    }
+
+    Ok(item)
+}
+
+pub async fn trigger_sync(state: &AppState, account_id: String) -> Result<usize> {
+    let engine_opt = state.sync_engines.read().get(&account_id).cloned();
+    let engine = engine_opt.ok_or_else(|| cirrus_core::error::CirrusError::NotFound {
+        entity: "SyncEngine".to_string(),
+        id: account_id.clone(),
+    })?;
+
+    let changes = engine.reconcile_delta_once().await?;
+
+    // Also process any pending uploads if online
+    let queue_and_provider = {
+        let q = state.upload_queues.read().get(&account_id).cloned();
+        let p = state.providers.read().get(&account_id).cloned();
+        (q, p)
+    };
+
+    if let (Some(queue), Some(provider)) = queue_and_provider {
+        if !queue.is_offline() {
+            let _ = queue.process_next(provider).await;
+        }
+    }
+
+    Ok(changes)
 }
 
 pub async fn get_cache_stats(state: &AppState) -> Result<cirrus_sync::CacheStats> {

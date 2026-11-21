@@ -114,11 +114,22 @@ impl HydrationManager {
         self.active_downloads.lock().contains(entry_id)
     }
 
-    /// Triggers background hydration of a file according to priority.
+    /// Triggers background hydration of a file using the configured default provider.
     pub async fn hydrate(
         &self,
         entry: &EntryRecord,
+        priority: HydrationPriority,
+    ) -> Result<PathBuf> {
+        self.hydrate_with_provider(entry, priority, self.provider.clone())
+            .await
+    }
+
+    /// Triggers background hydration of a file using a specified cloud provider.
+    pub async fn hydrate_with_provider(
+        &self,
+        entry: &EntryRecord,
         _priority: HydrationPriority,
+        provider: Arc<dyn CloudProvider>,
     ) -> Result<PathBuf> {
         let entry_id = entry.id.clone();
         if self.is_active(&entry_id) {
@@ -153,7 +164,9 @@ impl HydrationManager {
             state: FileState::Hydrating,
         });
 
-        let result = self.execute_download(entry, &part_path, &final_path).await;
+        let result = self
+            .execute_download(entry, &part_path, &final_path, &provider)
+            .await;
 
         self.active_downloads.lock().remove(&entry_id);
 
@@ -209,6 +222,7 @@ impl HydrationManager {
         entry: &EntryRecord,
         part_path: &Path,
         final_path: &Path,
+        provider: &Arc<dyn CloudProvider>,
     ) -> Result<PathBuf> {
         let entry_id = &entry.id;
 
@@ -247,7 +261,7 @@ impl HydrationManager {
         };
 
         // Fetch data from provider
-        let data = self.provider.download(entry_id, range).await?;
+        let data = provider.download(entry_id, range).await?;
 
         // Check cancellation
         if self.cancelled.lock().contains(entry_id) {

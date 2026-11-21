@@ -1,3 +1,5 @@
+use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -7,7 +9,8 @@ use cirrus_db::{
 };
 use cirrus_ops::OperationsManager;
 use cirrus_platform::{DesktopEntryManager, HangProofFs, TrashManager};
-use cirrus_sync::CacheManager;
+use cirrus_providers::{CloudProvider, CredentialsManager, MockCloudProvider};
+use cirrus_sync::{CacheManager, HydrationManager, SyncEngine, UploadQueueManager};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -22,6 +25,11 @@ pub struct AppState {
     pub cache_mgr: CacheManager,
     pub hangproof_fs: HangProofFs,
     pub cache_dir: PathBuf,
+    pub credentials_mgr: CredentialsManager,
+    pub providers: Arc<RwLock<HashMap<String, Arc<dyn CloudProvider>>>>,
+    pub sync_engines: Arc<RwLock<HashMap<String, Arc<SyncEngine>>>>,
+    pub upload_queues: Arc<RwLock<HashMap<String, Arc<UploadQueueManager>>>>,
+    pub hydration_mgr: Arc<HydrationManager>,
 }
 
 impl AppState {
@@ -46,6 +54,50 @@ impl AppState {
         let cache_mgr = CacheManager::new(&cache_dir, entries_repo.clone());
         let hangproof_fs = HangProofFs::default();
 
+        let credentials_mgr = CredentialsManager::default();
+
+        // Providers, Sync Engines, and Upload Queues registry
+        let providers_map: HashMap<String, Arc<dyn CloudProvider>> = HashMap::new();
+        let providers = Arc::new(RwLock::new(providers_map));
+
+        let sync_engines_map: HashMap<String, Arc<SyncEngine>> = HashMap::new();
+        let sync_engines = Arc::new(RwLock::new(sync_engines_map));
+
+        let upload_queues_map: HashMap<String, Arc<UploadQueueManager>> = HashMap::new();
+        let upload_queues = Arc::new(RwLock::new(upload_queues_map));
+
+        // Default initial provider for fallback hydration
+        let default_provider: Arc<dyn CloudProvider> = Arc::new(MockCloudProvider::new(
+            "acc_gdrive",
+            "Google Drive",
+            15 * 1024 * 1024 * 1024,
+        ));
+        providers
+            .write()
+            .insert("acc_gdrive".to_string(), default_provider.clone());
+
+        let default_engine = Arc::new(SyncEngine::new(
+            "acc_gdrive",
+            default_provider.clone(),
+            accounts_repo.clone(),
+            entries_repo.clone(),
+        ));
+        sync_engines
+            .write()
+            .insert("acc_gdrive".to_string(), default_engine);
+
+        let default_upload = Arc::new(UploadQueueManager::new("acc_gdrive", entries_repo.clone()));
+        upload_queues
+            .write()
+            .insert("acc_gdrive".to_string(), default_upload);
+
+        let hydration_mgr = Arc::new(HydrationManager::new(
+            &cache_dir,
+            entries_repo.clone(),
+            default_provider,
+            4,
+        )?);
+
         Ok(Self {
             db_pool,
             accounts_repo,
@@ -58,6 +110,36 @@ impl AppState {
             cache_mgr,
             hangproof_fs,
             cache_dir,
+            credentials_mgr,
+            providers,
+            sync_engines,
+            upload_queues,
+            hydration_mgr,
         })
+    }
+
+    /// Helper to register a newly connected cloud provider account into active memory
+    pub fn register_cloud_account(&self, account_id: &str, provider: Arc<dyn CloudProvider>) {
+        self.providers
+            .write()
+            .insert(account_id.to_string(), provider.clone());
+
+        let engine = Arc::new(SyncEngine::new(
+            account_id,
+            provider,
+            self.accounts_repo.clone(),
+            self.entries_repo.clone(),
+        ));
+        self.sync_engines
+            .write()
+            .insert(account_id.to_string(), engine);
+
+        let upload_queue = Arc::new(UploadQueueManager::new(
+            account_id,
+            self.entries_repo.clone(),
+        ));
+        self.upload_queues
+            .write()
+            .insert(account_id.to_string(), upload_queue);
     }
 }

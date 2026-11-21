@@ -46,6 +46,18 @@ pub enum CirrusError {
     #[error("Authentication required or expired for account '{account_id}': {reason}")]
     AuthRequired { account_id: String, reason: String },
 
+    #[error("Authentication error: {0}")]
+    Authentication(String),
+
+    #[error("Network error: {0}")]
+    Network(String),
+
+    #[error("Serialization error: {0}")]
+    Serialization(String),
+
+    #[error("Operation timed out")]
+    Timeout,
+
     #[error("Operation was cancelled")]
     Cancelled,
 
@@ -65,13 +77,17 @@ pub enum RecoveryAction {
 impl CirrusError {
     pub fn recovery_action(&self) -> RecoveryAction {
         match self {
-            Self::AuthRequired { .. } => RecoveryAction::Reconnect,
+            Self::AuthRequired { .. } | Self::Authentication(_) => RecoveryAction::Reconnect,
             Self::CircuitBreakerOpen { .. }
             | Self::Provider { .. }
+            | Self::Network(_)
+            | Self::Timeout
             | Self::UnresponsiveMount { .. } => RecoveryAction::Retry,
-            Self::Database(_) | Self::Storage(_) | Self::Sync(_) | Self::Io(_) => {
-                RecoveryAction::OpenLog
-            }
+            Self::Database(_)
+            | Self::Storage(_)
+            | Self::Sync(_)
+            | Self::Io(_)
+            | Self::Serialization(_) => RecoveryAction::OpenLog,
             _ => RecoveryAction::None,
         }
     }

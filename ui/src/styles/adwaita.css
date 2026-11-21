@@ -401,6 +401,10 @@ body {
   color: var(--state-error);
 }
 
+.adw-state-excluded {
+  color: var(--dim-fg);
+}
+
 /* Toasts and Operations Popover */
 .adw-toast-container {
   position: fixed;

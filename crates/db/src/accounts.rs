@@ -158,6 +158,25 @@ impl AccountRepository {
         Ok(())
     }
 
+    pub fn update_account_quota(&self, id: &str, total: u64, used: u64) -> Result<()> {
+        let conn = self.pool.get()?;
+        let now = chrono::Utc::now().timestamp();
+
+        conn.execute(
+            "
+            UPDATE accounts SET
+                quota_total = ?1,
+                quota_used = ?2,
+                updated_at = ?3
+            WHERE id = ?4
+            ",
+            params![total as i64, used as i64, now, id],
+        )
+        .map_err(|e| CirrusError::Database(format!("Failed to update account quota: {}", e)))?;
+
+        Ok(())
+    }
+
     pub fn delete_account(&self, id: &str) -> Result<()> {
         let conn = self.pool.get()?;
         conn.execute("DELETE FROM accounts WHERE id = ?1", params![id])

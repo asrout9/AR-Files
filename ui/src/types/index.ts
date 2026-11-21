@@ -89,3 +89,26 @@ export interface OperationProgress {
   speed_bps: number;
   eta_seconds?: number | null;
 }
+
+export interface ProviderQuota {
+  total_bytes: number;
+  used_bytes: number;
+  trash_bytes?: number | null;
+}
+
+export interface SyncStatusInfo {
+  account_id: string;
+  sync_status: string;
+  is_offline: boolean;
+  pending_uploads_count: number;
+  quota_total?: number | null;
+  quota_used?: number | null;
+}
+
+export interface HydrationProgressEvent {
+  entry_id: string;
+  bytes_downloaded: number;
+  total_bytes: number;
+  speed_bps: number;
+  state: FileState;
+}

@@ -2,11 +2,13 @@ pub mod cache;
 pub mod conflict;
 pub mod engine;
 pub mod hydration;
+pub mod upload_queue;
 
 pub use cache::{CacheManager, CacheStats};
 pub use conflict::ConflictDetector;
 pub use engine::SyncEngine;
 pub use hydration::{HydrationManager, HydrationPriority, HydrationProgress};
+pub use upload_queue::{UploadItem, UploadQueueManager, UploadStatus};
 
 #[cfg(test)]
 mod tests {

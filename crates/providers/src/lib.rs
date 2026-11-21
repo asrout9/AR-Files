@@ -1,8 +1,14 @@
+pub mod credentials;
+pub mod gdrive;
 pub mod mock;
+pub mod oauth;
 pub mod trait_def;
 pub mod types;
 
+pub use credentials::CredentialsManager;
+pub use gdrive::GoogleDriveProvider;
 pub use mock::MockCloudProvider;
+pub use oauth::{GoogleOAuthFlow, OAuthTokenResponse, PkceChallenge};
 pub use trait_def::CloudProvider;
 pub use types::{ByteRange, DeltaChange, DeltaFeed, ProviderCapabilities, ProviderQuota};
 

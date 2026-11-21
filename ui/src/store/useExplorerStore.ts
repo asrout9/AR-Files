@@ -55,6 +55,7 @@ interface ExplorerState {
   sortDirection: SortDirection;
   showHidden: boolean;
   searchQuery: string;
+  pendingUploadsCount: number;
 
   // Actions
   loadAccounts: () => Promise<void>;
@@ -87,6 +88,16 @@ interface ExplorerState {
   setSort: (by: SortField) => void;
   toggleShowHidden: () => void;
   setSearchQuery: (query: string) => void;
+
+  // Cloud & Sync
+  connectGoogleDrive: (name?: string) => Promise<void>;
+  toggleAccountOffline: (accountId: string) => Promise<void>;
+  refreshQuota: (accountId: string) => Promise<void>;
+  refreshSyncStatus: (accountId: string) => Promise<void>;
+  triggerSync: (accountId: string) => Promise<void>;
+  cancelHydration: (id: string) => Promise<void>;
+  pinItem: (id: string) => Promise<void>;
+  unpinItem: (id: string) => Promise<void>;
 
   // Operations
   hydrateItem: (id: string) => Promise<void>;
@@ -137,6 +148,7 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
   sortDirection: "asc",
   showHidden: false,
   searchQuery: "",
+  pendingUploadsCount: 0,
 
   loadAccounts: async () => {
     try {
@@ -501,12 +513,132 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
     get().loadEntries();
   },
 
+  connectGoogleDrive: async (name?: string) => {
+    try {
+      await invokeCommand("start_google_oauth", { account_name: name });
+      await get().loadAccounts();
+    } catch (err) {
+      console.error("Connect Google Drive failed", err);
+    }
+  },
+
+  toggleAccountOffline: async (accountId: string) => {
+    const acc = get().accounts.find((a) => a.id === accountId);
+    if (!acc) return;
+    const isNowOffline = acc.sync_status !== "offline";
+    try {
+      await invokeCommand("set_offline_mode", {
+        account_id: accountId,
+        offline: isNowOffline,
+      });
+      set((state) => ({
+        accounts: state.accounts.map((a) =>
+          a.id === accountId
+            ? { ...a, sync_status: isNowOffline ? "offline" : "idle" }
+            : a
+        ),
+      }));
+      await get().refreshSyncStatus(accountId);
+    } catch (err) {
+      console.error("Toggle offline mode failed", err);
+    }
+  },
+
+  refreshQuota: async (accountId: string) => {
+    try {
+      const quota = await invokeCommand<{ total_bytes: number; used_bytes: number }>(
+        "get_account_quota",
+        { account_id: accountId }
+      );
+      if (quota) {
+        set((state) => ({
+          accounts: state.accounts.map((a) =>
+            a.id === accountId
+              ? {
+                  ...a,
+                  quota_total: quota.total_bytes,
+                  quota_used: quota.used_bytes,
+                }
+              : a
+          ),
+        }));
+      }
+    } catch (err) {
+      console.error("Refresh quota failed", err);
+    }
+  },
+
+  refreshSyncStatus: async (accountId: string) => {
+    try {
+      const statusInfo = await invokeCommand<{
+        pending_uploads_count: number;
+        is_offline: boolean;
+      }>("get_sync_status", { account_id: accountId });
+      if (statusInfo) {
+        set({
+          pendingUploadsCount: statusInfo.pending_uploads_count,
+        });
+      }
+    } catch (err) {
+      console.error("Refresh sync status failed", err);
+    }
+  },
+
+  triggerSync: async (accountId: string) => {
+    try {
+      await invokeCommand("trigger_sync", { account_id: accountId });
+      await get().loadEntries();
+      await get().refreshQuota(accountId);
+      await get().refreshSyncStatus(accountId);
+    } catch (err) {
+      console.error("Trigger sync failed", err);
+    }
+  },
+
   hydrateItem: async (id: string) => {
     try {
-      await invokeCommand("pin_entry", { entry_id: id });
+      set((state) => ({
+        entries: state.entries.map((e) =>
+          e.id === id ? { ...e, state: "hydrating" } : e
+        ),
+      }));
+      await invokeCommand("hydrate_entry", { entry_id: id });
       await get().loadEntries();
     } catch (err) {
       console.error("Hydration command failed", err);
+      await get().loadEntries();
+    }
+  },
+
+  cancelHydration: async (id: string) => {
+    try {
+      await invokeCommand("cancel_hydration", { entry_id: id });
+      await get().loadEntries();
+    } catch (err) {
+      console.error("Cancel hydration failed", err);
+    }
+  },
+
+  pinItem: async (id: string) => {
+    try {
+      set((state) => ({
+        entries: state.entries.map((e) =>
+          e.id === id ? { ...e, state: "pinned" } : e
+        ),
+      }));
+      await invokeCommand("pin_entry", { entry_id: id });
+      await get().loadEntries();
+    } catch (err) {
+      console.error("Pin entry failed", err);
+    }
+  },
+
+  unpinItem: async (id: string) => {
+    try {
+      await invokeCommand("unpin_entry", { entry_id: id });
+      await get().loadEntries();
+    } catch (err) {
+      console.error("Unpin entry failed", err);
     }
   },
 

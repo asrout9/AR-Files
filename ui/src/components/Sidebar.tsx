@@ -12,6 +12,7 @@ import {
   RefreshCw,
   AlertCircle,
   CloudOff,
+  Plus,
 } from "lucide-react";
 import { useExplorerStore } from "../store/useExplorerStore";
 import { AccountSyncStatus } from "../types";
@@ -22,6 +23,10 @@ export const Sidebar: React.FC = () => {
     currentAccountId,
     currentFolderId,
     navigateTo,
+    connectGoogleDrive,
+    toggleAccountOffline,
+    triggerSync,
+    pendingUploadsCount,
   } = useExplorerStore();
 
   const places = [
@@ -78,12 +83,24 @@ export const Sidebar: React.FC = () => {
 
       {/* Cloud Drives & Accounts Section */}
       <div className="adw-sidebar-section">
-        <span className="adw-sidebar-heading">Cloud Drives</span>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingRight: 6 }}>
+          <span className="adw-sidebar-heading">Cloud Drives</span>
+          <button
+            className="adw-btn adw-btn-icon"
+            style={{ width: 22, height: 22, border: "none", background: "none" }}
+            title="Connect Google Drive (OAuth PKCE)"
+            onClick={() => connectGoogleDrive()}
+          >
+            <Plus size={14} />
+          </button>
+        </div>
+
         {accounts.map((account) => {
           const isActive = currentAccountId === account.id && currentFolderId === null;
           const used = account.quota_used || 0;
           const total = account.quota_total || 1;
           const percent = Math.min(100, Math.round((used / total) * 100));
+          const isOffline = account.sync_status === "offline";
 
           return (
             <div
@@ -97,8 +114,47 @@ export const Sidebar: React.FC = () => {
                   <Cloud size={16} color="var(--adw-accent-blue)" />
                   <span>{account.name}</span>
                 </div>
-                {getSyncIcon(account.sync_status)}
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <button
+                    className="adw-btn adw-btn-icon"
+                    style={{ width: 20, height: 20, border: "none", background: "none", padding: 0 }}
+                    title={isOffline ? "Go Online" : "Work Offline"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleAccountOffline(account.id);
+                    }}
+                  >
+                    {isOffline ? <CloudOff size={13} color="var(--dim-fg)" /> : <Cloud size={13} color="var(--state-available)" />}
+                  </button>
+                  <button
+                    className="adw-btn adw-btn-icon"
+                    style={{ width: 20, height: 20, border: "none", background: "none", padding: 0 }}
+                    title="Sync Now"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      triggerSync(account.id);
+                    }}
+                  >
+                    {getSyncIcon(account.sync_status) || <RefreshCw size={12} color="var(--dim-fg)" />}
+                  </button>
+                </div>
               </div>
+
+              {/* Offline / Pending uploads banner */}
+              {isOffline && (
+                <div
+                  style={{
+                    fontSize: 10,
+                    color: "var(--dim-fg)",
+                    background: "rgba(255, 255, 255, 0.05)",
+                    padding: "2px 6px",
+                    borderRadius: 4,
+                    width: "100%",
+                  }}
+                >
+                  Offline {pendingUploadsCount > 0 ? `• ${pendingUploadsCount} pending` : ""}
+                </div>
+              )}
 
               {/* Quota Bar */}
               {account.quota_total ? (

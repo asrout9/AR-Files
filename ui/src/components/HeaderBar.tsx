@@ -11,6 +11,8 @@ import {
   Eye,
   EyeOff,
   ArrowUpDown,
+  RefreshCw,
+  CloudOff,
 } from "lucide-react";
 import { useExplorerStore } from "../store/useExplorerStore";
 import { SortField } from "../types";
@@ -39,6 +41,8 @@ export const HeaderBar: React.FC = () => {
     closeTab,
     activeTabId,
     selectAll,
+    accounts,
+    pendingUploadsCount,
   } = useExplorerStore();
 
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -371,6 +375,51 @@ export const HeaderBar: React.FC = () => {
             </div>
           )}
         </div>
+
+        {/* Cloud Sync & Offline Status Indicator */}
+        {(() => {
+          const currentAccount = accounts.find((a) => a.id === currentAccountId);
+          if (!currentAccount) return null;
+
+          if (currentAccount.sync_status === "offline") {
+            return (
+              <span
+                style={{
+                  fontSize: 11,
+                  color: "var(--dim-fg)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  background: "rgba(255, 255, 255, 0.06)",
+                  padding: "3px 8px",
+                  borderRadius: 12,
+                }}
+              >
+                <CloudOff size={12} />
+                <span>Offline{pendingUploadsCount > 0 ? ` • ${pendingUploadsCount} pending` : ""}</span>
+              </span>
+            );
+          }
+
+          if (currentAccount.sync_status === "syncing" || currentAccount.sync_status === "indexing") {
+            return (
+              <span
+                style={{
+                  fontSize: 11,
+                  color: "var(--adw-accent-blue)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                <RefreshCw size={11} className="spin" style={{ animation: "spin 1s linear infinite" }} />
+                <span>Syncing</span>
+              </span>
+            );
+          }
+
+          return null;
+        })()}
 
         {/* View Mode Toggle */}
         <div

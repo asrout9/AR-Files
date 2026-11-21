@@ -9,6 +9,8 @@ import {
   Archive,
   FileArchive,
   Trash,
+  Share2,
+  XCircle,
 } from "lucide-react";
 import { EntryRecord } from "../types";
 import { useExplorerStore } from "../store/useExplorerStore";
@@ -38,8 +40,14 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onExtract,
   onDeletePermanently,
 }) => {
-  const { hydrateItem, freeUpSpaceItem, trashSelected, selectedIds } =
-    useExplorerStore();
+  const {
+    hydrateItem,
+    cancelHydration,
+    pinItem,
+    freeUpSpaceItem,
+    trashSelected,
+    selectedIds,
+  } = useExplorerStore();
 
   if (!entry) return null;
 
@@ -50,13 +58,29 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     entry.mime_type.includes("zip") ||
     entry.mime_type.includes("tar");
 
-  const handleAlwaysKeep = () => {
+  const handleDownloadNow = () => {
     hydrateItem(entry.id);
+    onClose();
+  };
+
+  const handleCancelDownload = () => {
+    cancelHydration(entry.id);
+    onClose();
+  };
+
+  const handleAlwaysKeep = () => {
+    pinItem(entry.id);
     onClose();
   };
 
   const handleFreeUpSpace = () => {
     freeUpSpaceItem(entry.id);
+    onClose();
+  };
+
+  const handleCopyShareLink = () => {
+    const link = `https://drive.google.com/file/d/${entry.remote_id || entry.id}/view`;
+    navigator.clipboard?.writeText(link);
     onClose();
   };
 
@@ -102,7 +126,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         }}
       >
         {/* Cloud Hydration / Pin / Evict Actions */}
-        {entry.state === "cloud_only" && (
+        {(entry.state === "cloud_only" || entry.state === "error") && (
           <button
             className="adw-sidebar-item"
             style={{
@@ -111,10 +135,26 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
               background: "none",
               width: "100%",
             }}
-            onClick={handleAlwaysKeep}
+            onClick={handleDownloadNow}
           >
             <Download size={15} />
             <span>Download now</span>
+          </button>
+        )}
+
+        {entry.state === "hydrating" && (
+          <button
+            className="adw-sidebar-item"
+            style={{
+              borderRadius: 0,
+              border: "none",
+              background: "none",
+              width: "100%",
+            }}
+            onClick={handleCancelDownload}
+          >
+            <XCircle size={15} color="var(--state-error)" />
+            <span>Cancel download</span>
           </button>
         )}
 
@@ -132,7 +172,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           <span>Always keep on this device</span>
         </button>
 
-        {entry.state === "available" && (
+        {(entry.state === "available" || entry.state === "pinned") && (
           <button
             className="adw-sidebar-item"
             style={{
@@ -147,6 +187,20 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
             <span>Free up space</span>
           </button>
         )}
+
+        <button
+          className="adw-sidebar-item"
+          style={{
+            borderRadius: 0,
+            border: "none",
+            background: "none",
+            width: "100%",
+          }}
+          onClick={handleCopyShareLink}
+        >
+          <Share2 size={15} />
+          <span>Copy share link</span>
+        </button>
 
         <div
           style={{
