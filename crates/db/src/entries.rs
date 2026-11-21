@@ -270,8 +270,12 @@ impl EntryRepository {
             return Ok(Vec::new());
         }
 
-        // Prefix matching query for instant search-as-you-type
-        let fts_query = format!("\"{}\"*", sanitized);
+        // Prefix matching query per term for instant search-as-you-type
+        let tokens: Vec<String> = sanitized
+            .split_whitespace()
+            .map(|t| format!("\"{}\"*", t))
+            .collect();
+        let fts_query = tokens.join(" ");
 
         let sql = "
             SELECT e.* FROM entries_fts fts

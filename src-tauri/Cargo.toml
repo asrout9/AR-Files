@@ -12,6 +12,7 @@ cirrus-providers.workspace = true
 cirrus-sync.workspace = true
 cirrus-ops.workspace = true
 cirrus-platform.workspace = true
+cirrus-vfs.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

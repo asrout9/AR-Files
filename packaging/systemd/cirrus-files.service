@@ -1,0 +1,17 @@
+[Unit]
+Description=Cirrus Files Background Sync and VFS Daemon
+Documentation=https://github.com/cirrus-files/cirrus-files
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/cirrus-files --daemon
+Restart=on-failure
+RestartSec=5s
+Slice=app-graphical.slice
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical-session.target

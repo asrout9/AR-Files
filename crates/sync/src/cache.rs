@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::info;
 
@@ -5,7 +6,7 @@ use cirrus_core::error::{CirrusError, Result};
 use cirrus_core::state::FileState;
 use cirrus_db::EntryRepository;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CacheStats {
     pub total_cached_bytes: u64,
     pub evictable_bytes: u64,
@@ -84,5 +85,17 @@ impl CacheManager {
         }
 
         Ok(freed_bytes)
+    }
+
+    /// Calculates cache statistics across all entries.
+    pub fn calculate_stats(&self) -> Result<CacheStats> {
+        let evictable = self.entries_repo.get_evictable_entries(10_000)?;
+        let evictable_bytes: u64 = evictable.iter().map(|e| e.size).sum();
+
+        Ok(CacheStats {
+            total_cached_bytes: evictable_bytes,
+            evictable_bytes,
+            pinned_bytes: 0,
+        })
     }
 }

@@ -8,7 +8,11 @@ license.workspace = true
 [dependencies]
 cirrus-core.workspace = true
 cirrus-db.workspace = true
-tokio.workspace = true
+chrono.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+parking_lot.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

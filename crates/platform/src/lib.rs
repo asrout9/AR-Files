@@ -1,9 +1,13 @@
+pub mod dbus_file_manager;
 pub mod desktop_entry;
 pub mod theme;
 pub mod thumbnail;
 pub mod trash;
 pub mod watcher;
 
+pub use dbus_file_manager::{
+    register_file_manager_service, FileManager1Service, FileManagerRequest,
+};
 pub use desktop_entry::{DesktopEntry, DesktopEntryManager};
 pub use theme::{ColorScheme, GnomeAppearance, ThemeManager};
 pub use thumbnail::{ThumbnailManager, ThumbnailSize};
@@ -79,5 +83,28 @@ mod tests {
         // URL code %u
         let tokens_u = DesktopEntryManager::format_exec_tokens("firefox %u", &files);
         assert_eq!(tokens_u, vec!["firefox", "file:///home/user/doc1.txt"]);
+    }
+
+    #[tokio::test]
+    async fn test_dbus_file_manager_requests() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        let service = FileManager1Service::new(tx);
+
+        service
+            .show_items(
+                vec!["file:///home/user/test.txt".to_string()],
+                "test-id".to_string(),
+            )
+            .await
+            .expect("show_items failed");
+
+        let received = rx.recv().await.expect("No request received");
+        match received {
+            FileManagerRequest::ShowItems { uris, startup_id } => {
+                assert_eq!(uris, vec!["file:///home/user/test.txt"]);
+                assert_eq!(startup_id, "test-id");
+            }
+            _ => panic!("Unexpected request variant"),
+        }
     }
 }

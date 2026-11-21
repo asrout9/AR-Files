@@ -7,6 +7,7 @@ use cirrus_db::{
 };
 use cirrus_ops::OperationsManager;
 use cirrus_platform::{DesktopEntryManager, TrashManager};
+use cirrus_sync::CacheManager;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -18,6 +19,7 @@ pub struct AppState {
     pub desktop_mgr: Arc<DesktopEntryManager>,
     pub trash_mgr: Arc<TrashManager>,
     pub ops_mgr: OperationsManager,
+    pub cache_mgr: CacheManager,
     pub cache_dir: PathBuf,
 }
 
@@ -40,6 +42,7 @@ impl AppState {
         let desktop_mgr = Arc::new(DesktopEntryManager::new());
         let trash_mgr = Arc::new(TrashManager::new()?);
         let ops_mgr = OperationsManager::new(entries_repo.clone(), journal_repo.clone(), 50);
+        let cache_mgr = CacheManager::new(&cache_dir, entries_repo.clone());
 
         Ok(Self {
             db_pool,
@@ -50,6 +53,7 @@ impl AppState {
             desktop_mgr,
             trash_mgr,
             ops_mgr,
+            cache_mgr,
             cache_dir,
         })
     }

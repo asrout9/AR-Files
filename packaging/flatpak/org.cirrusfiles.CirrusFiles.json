@@ -1,0 +1,69 @@
+{
+  "app-id": "org.cirrusfiles.CirrusFiles",
+  "runtime": "org.gnome.Platform",
+  "runtime-version": "47",
+  "sdk": "org.gnome.Sdk",
+  "sdk-extensions": [
+    "org.freedesktop.Sdk.Extension.rust-stable",
+    "org.freedesktop.Sdk.Extension.node22"
+  ],
+  "command": "cirrus-files",
+  "finish-args": [
+    "--share=network",
+    "--share=ipc",
+    "--socket=wayland",
+    "--socket=fallback-x11",
+    "--filesystem=host",
+    "--filesystem=xdg-run/dconf",
+    "--filesystem=~/.cache/cirrus-files:create",
+    "--filesystem=~/.local/share/cirrus-files:create",
+    "--device=all",
+    "--talk-name=org.freedesktop.FileManager1",
+    "--talk-name=org.freedesktop.portal.Desktop",
+    "--talk-name=org.freedesktop.secrets",
+    "--talk-name=org.freedesktop.Notifications",
+    "--system-talk-name=org.freedesktop.UDisks2"
+  ],
+  "build-options": {
+    "append-path": "/usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node22/bin",
+    "env": {
+      "CARGO_HOME": "/run/build/cirrus-files/cargo"
+    }
+  },
+  "modules": [
+    {
+      "name": "fuse3",
+      "buildsystem": "meson",
+      "config-opts": [
+        "-Dexamples=false",
+        "-Duseroot=false"
+      ],
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://github.com/libfuse/libfuse/releases/download/fuse-3.16.2/fuse-3.16.2.tar.gz",
+          "sha256": "f797055d9296b275e981f5f3ff147ac613369b177874f52836f6720e61745dbf"
+        }
+      ]
+    },
+    {
+      "name": "cirrus-files",
+      "buildsystem": "simple",
+      "build-commands": [
+        "cd ui && npm ci && npm run build && cd ..",
+        "cargo build --release --locked",
+        "install -Dm755 target/release/cirrus-files /app/bin/cirrus-files",
+        "install -Dm644 packaging/desktop/org.cirrusfiles.CirrusFiles.desktop /app/share/applications/org.cirrusfiles.CirrusFiles.desktop",
+        "install -Dm644 packaging/metainfo/org.cirrusfiles.CirrusFiles.metainfo.xml /app/share/metainfo/org.cirrusfiles.CirrusFiles.metainfo.xml",
+        "install -Dm644 packaging/icons/hicolor/scalable/apps/org.cirrusfiles.CirrusFiles.svg /app/share/icons/hicolor/scalable/apps/org.cirrusfiles.CirrusFiles.svg",
+        "install -Dm644 packaging/dbus/org.freedesktop.FileManager1.service /app/share/dbus-1/services/org.freedesktop.FileManager1.service"
+      ],
+      "sources": [
+        {
+          "type": "dir",
+          "path": "."
+        }
+      ]
+    }
+  ]
+}

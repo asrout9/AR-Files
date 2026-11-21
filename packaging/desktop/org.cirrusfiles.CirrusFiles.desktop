@@ -1,0 +1,22 @@
+[Desktop Entry]
+Name=Files
+GenericName=File Manager
+Comment=Access and organize files, local storage, and cloud drives
+Exec=cirrus-files %U
+Icon=org.cirrusfiles.CirrusFiles
+Terminal=false
+Type=Application
+StartupNotify=true
+Categories=System;FileTools;FileManager;
+MimeType=inode/directory;
+Actions=new-window;preferences;
+X-GNOME-UsesNotifications=true
+X-Purism-FormFactor=Workstation;Mobile;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=cirrus-files --new-window
+
+[Desktop Action preferences]
+Name=Preferences
+Exec=cirrus-files --preferences

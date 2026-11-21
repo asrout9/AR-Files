@@ -103,3 +103,34 @@ pub async fn undo_last_operation(state: &AppState) -> Result<()> {
 pub fn get_default_app(state: &AppState, mime_type: &str) -> Option<DesktopEntry> {
     state.desktop_mgr.get_default_app(mime_type).cloned()
 }
+
+pub async fn free_up_space(state: &AppState, entry_id: String) -> Result<()> {
+    state.cache_mgr.free_up_space(&entry_id)
+}
+
+pub async fn pin_entry(state: &AppState, entry_id: String) -> Result<()> {
+    state
+        .entries_repo
+        .update_state(&entry_id, cirrus_core::state::FileState::Pinned, None, None)
+}
+
+pub async fn unpin_entry(state: &AppState, entry_id: String) -> Result<()> {
+    state.entries_repo.update_state(
+        &entry_id,
+        cirrus_core::state::FileState::Available,
+        None,
+        None,
+    )
+}
+
+pub async fn get_cache_stats(state: &AppState) -> Result<cirrus_sync::CacheStats> {
+    state.cache_mgr.calculate_stats()
+}
+
+pub fn create_vfs_for_account(
+    state: &AppState,
+    account_id: &str,
+    mount_point: &std::path::Path,
+) -> cirrus_vfs::CirrusVfs {
+    cirrus_vfs::CirrusVfs::new(account_id, mount_point, state.entries_repo.clone())
+}
