@@ -1,0 +1,18 @@
+[package]
+name = "cirrus-providers"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+cirrus-core.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+bytes.workspace = true
+bitflags.workspace = true

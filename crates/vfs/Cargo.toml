@@ -1,0 +1,14 @@
+[package]
+name = "cirrus-vfs"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+cirrus-core.workspace = true
+cirrus-db.workspace = true
+tokio.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
