@@ -21,6 +21,7 @@ export const GridView: React.FC<GridViewProps> = ({ onContextMenu }) => {
     entries,
     selectedIds,
     toggleSelect,
+    clearSelection,
     navigateTo,
     currentAccountId,
     hydrateItem,
@@ -54,7 +55,12 @@ export const GridView: React.FC<GridViewProps> = ({ onContextMenu }) => {
   };
 
   return (
-    <div className="adw-grid-container">
+    <div
+      className="adw-grid-container"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) clearSelection();
+      }}
+    >
       {entries.map((entry) => {
         const isSelected = selectedIds.has(entry.id);
 
@@ -62,7 +68,9 @@ export const GridView: React.FC<GridViewProps> = ({ onContextMenu }) => {
           <div
             key={entry.id}
             className={`adw-grid-item ${isSelected ? "selected" : ""}`}
-            onClick={(e) => toggleSelect(entry.id, e.ctrlKey || e.metaKey)}
+            onClick={(e) =>
+              toggleSelect(entry.id, e.ctrlKey || e.metaKey, e.shiftKey)
+            }
             onDoubleClick={() => handleDoubleClick(entry)}
             onContextMenu={(e) => {
               e.preventDefault();

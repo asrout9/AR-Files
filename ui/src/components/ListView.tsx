@@ -23,6 +23,7 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
     entries,
     selectedIds,
     toggleSelect,
+    clearSelection,
     navigateTo,
     currentAccountId,
     hydrateItem,
@@ -117,6 +118,9 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
       {/* Virtualized Rows Container */}
       <div
         ref={parentRef}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) clearSelection();
+        }}
         style={{
           flex: 1,
           overflowY: "auto",
@@ -147,7 +151,9 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
                   height: `${virtualRow.size}px`,
                   transform: `translateY(${virtualRow.start}px)`,
                 }}
-                onClick={(e) => toggleSelect(entry.id, e.ctrlKey || e.metaKey)}
+                onClick={(e) =>
+                  toggleSelect(entry.id, e.ctrlKey || e.metaKey, e.shiftKey)
+                }
                 onDoubleClick={() => handleDoubleClick(entry)}
                 onContextMenu={(e) => {
                   e.preventDefault();

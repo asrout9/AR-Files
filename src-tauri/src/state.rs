@@ -6,7 +6,7 @@ use cirrus_db::{
     AccountRepository, DatabasePool, EntryRepository, JournalRepository, SettingsRepository,
 };
 use cirrus_ops::OperationsManager;
-use cirrus_platform::{DesktopEntryManager, TrashManager};
+use cirrus_platform::{DesktopEntryManager, HangProofFs, TrashManager};
 use cirrus_sync::CacheManager;
 
 #[derive(Clone)]
@@ -20,6 +20,7 @@ pub struct AppState {
     pub trash_mgr: Arc<TrashManager>,
     pub ops_mgr: OperationsManager,
     pub cache_mgr: CacheManager,
+    pub hangproof_fs: HangProofFs,
     pub cache_dir: PathBuf,
 }
 
@@ -43,6 +44,7 @@ impl AppState {
         let trash_mgr = Arc::new(TrashManager::new()?);
         let ops_mgr = OperationsManager::new(entries_repo.clone(), journal_repo.clone(), 50);
         let cache_mgr = CacheManager::new(&cache_dir, entries_repo.clone());
+        let hangproof_fs = HangProofFs::default();
 
         Ok(Self {
             db_pool,
@@ -54,6 +56,7 @@ impl AppState {
             trash_mgr,
             ops_mgr,
             cache_mgr,
+            hangproof_fs,
             cache_dir,
         })
     }

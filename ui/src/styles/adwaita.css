@@ -425,3 +425,88 @@ body {
   align-items: center;
   gap: 12px;
 }
+
+/* Tab Bar (Libadwaita style) */
+.adw-tabbar {
+  display: flex;
+  align-items: center;
+  background-color: var(--headerbar-bg);
+  border-bottom: 1px solid var(--border-color);
+  padding: 0 8px;
+  height: 38px;
+  gap: 4px;
+  user-select: none;
+}
+
+.adw-tabbar-list {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  overflow-x: auto;
+  gap: 4px;
+}
+
+.adw-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  height: 30px;
+  border-radius: var(--adw-radius-m) var(--adw-radius-m) 0 0;
+  background-color: transparent;
+  color: var(--dim-fg);
+  cursor: pointer;
+  max-width: 200px;
+  min-width: 100px;
+  border-bottom: 2px solid transparent;
+  transition: var(--adw-transition);
+}
+
+.adw-tab:hover {
+  background-color: var(--hover-bg);
+  color: var(--window-fg);
+}
+
+.adw-tab.active {
+  background-color: var(--view-bg);
+  color: var(--window-fg);
+  font-weight: 500;
+  border-bottom: 2px solid var(--active-accent);
+}
+
+.adw-tab-icon {
+  flex-shrink: 0;
+  color: var(--active-accent);
+}
+
+.adw-tab-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.adw-tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--dim-fg);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: var(--adw-transition);
+}
+
+.adw-tab-close:hover {
+  background-color: rgba(255, 0, 0, 0.2);
+  color: var(--state-error);
+}
+
+.adw-tabbar-new {
+  margin-left: auto;
+}

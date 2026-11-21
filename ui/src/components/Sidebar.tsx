@@ -137,7 +137,10 @@ export const Sidebar: React.FC = () => {
       {/* Devices Section */}
       <div className="adw-sidebar-section">
         <span className="adw-sidebar-heading">Devices</span>
-        <div className="adw-sidebar-item">
+        <div
+          className={`adw-sidebar-item ${currentAccountId === "acc_local" ? "active" : ""}`}
+          onClick={() => navigateTo("acc_local", null, "Fedora System")}
+        >
           <HardDrive size={16} />
           <span>Fedora System</span>
         </div>

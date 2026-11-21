@@ -13,20 +13,41 @@ export interface BreadcrumbItem {
   name: string;
 }
 
+export interface TabItem {
+  id: string;
+  title: string;
+  accountId: string | null;
+  folderId: string | null;
+  breadcrumbs: BreadcrumbItem[];
+  history: Array<{
+    accountId: string | null;
+    folderId: string | null;
+    breadcrumbs: BreadcrumbItem[];
+  }>;
+  historyIndex: number;
+}
+
 interface ExplorerState {
-  // Navigation & Hierarchy
+  // Tabs & Navigation Hierarchy
+  tabs: TabItem[];
+  activeTabId: string;
   currentAccountId: string | null;
   currentFolderId: string | null;
   breadcrumbs: BreadcrumbItem[];
-  history: Array<{ accountId: string | null; folderId: string | null; breadcrumbs: BreadcrumbItem[] }>;
+  history: Array<{
+    accountId: string | null;
+    folderId: string | null;
+    breadcrumbs: BreadcrumbItem[];
+  }>;
   historyIndex: number;
 
-  // Data
+  // Data & Selection
   accounts: AccountRecord[];
   entries: EntryRecord[];
   totalEntriesCount: number;
   isLoading: boolean;
   selectedIds: Set<string>;
+  lastSelectedAnchorId: string | null;
 
   // View Settings
   viewMode: ViewMode;
@@ -38,17 +59,36 @@ interface ExplorerState {
   // Actions
   loadAccounts: () => Promise<void>;
   loadEntries: () => Promise<void>;
-  navigateTo: (accountId: string | null, folderId: string | null, name: string) => void;
+  navigateTo: (
+    accountId: string | null,
+    folderId: string | null,
+    name: string
+  ) => void;
   goBack: () => void;
   goForward: () => void;
   goUp: () => void;
-  toggleSelect: (id: string, isMulti: boolean) => void;
+
+  // Tabs
+  openNewTab: (
+    accountId?: string | null,
+    folderId?: string | null,
+    title?: string
+  ) => void;
+  closeTab: (tabId: string) => void;
+  switchTab: (tabId: string) => void;
+
+  // Selection
+  toggleSelect: (id: string, isMulti: boolean, isRange?: boolean) => void;
   selectAll: () => void;
   clearSelection: () => void;
+
+  // View controls
   setViewMode: (mode: ViewMode) => void;
   setSort: (by: SortField) => void;
   toggleShowHidden: () => void;
   setSearchQuery: (query: string) => void;
+
+  // Operations
   hydrateItem: (id: string) => Promise<void>;
   freeUpSpaceItem: (id: string) => Promise<void>;
   createFolder: (name: string) => Promise<void>;
@@ -56,11 +96,25 @@ interface ExplorerState {
   trashSelected: () => Promise<void>;
 }
 
+const initialBreadcrumbs: BreadcrumbItem[] = [{ id: null, name: "Google Drive" }];
+const initialTabId = "tab_initial_1";
+const initialTab: TabItem = {
+  id: initialTabId,
+  title: "Google Drive",
+  accountId: "acc_gdrive",
+  folderId: null,
+  breadcrumbs: initialBreadcrumbs,
+  history: [{ accountId: "acc_gdrive", folderId: null, breadcrumbs: initialBreadcrumbs }],
+  historyIndex: 0,
+};
+
 export const useExplorerStore = create<ExplorerState>((set, get) => ({
+  tabs: [initialTab],
+  activeTabId: initialTabId,
   currentAccountId: "acc_gdrive",
   currentFolderId: null,
-  breadcrumbs: [{ id: null, name: "Google Drive" }],
-  history: [{ accountId: "acc_gdrive", folderId: null, breadcrumbs: [{ id: null, name: "Google Drive" }] }],
+  breadcrumbs: initialBreadcrumbs,
+  history: [{ accountId: "acc_gdrive", folderId: null, breadcrumbs: initialBreadcrumbs }],
   historyIndex: 0,
 
   accounts: [],
@@ -68,6 +122,7 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
   totalEntriesCount: 0,
   isLoading: false,
   selectedIds: new Set(),
+  lastSelectedAnchorId: null,
 
   viewMode: "list",
   sortBy: "name",
@@ -85,25 +140,71 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
   },
 
   loadEntries: async () => {
-    const { currentAccountId, currentFolderId, sortBy, sortDirection, showHidden, searchQuery } = get();
+    const {
+      currentAccountId,
+      currentFolderId,
+      sortBy,
+      sortDirection,
+      showHidden,
+      searchQuery,
+    } = get();
     set({ isLoading: true });
 
     try {
-      const res = await invokeCommand<{ items: EntryRecord[]; total_count: number }>("list_entries", {
-        query: {
-          account_id: currentAccountId,
-          parent_id: currentFolderId,
-          offset: 0,
-          limit: 1000,
-          sort_by: sortBy,
-          sort_direction: sortDirection,
-          show_hidden: showHidden,
-          filter: searchQuery.trim() ? searchQuery : null,
-        },
+      const res = await invokeCommand<{ items: EntryRecord[]; total_count: number }>(
+        "list_entries",
+        {
+          query: {
+            account_id: currentAccountId,
+            parent_id: currentFolderId,
+            offset: 0,
+            limit: 1000,
+            sort_by: sortBy,
+            sort_direction: sortDirection,
+            show_hidden: showHidden,
+            filter: searchQuery.trim() ? searchQuery : null,
+          },
+        }
+      );
+
+      // Sort with folders first and natural alphanumeric collation
+      const sorted = [...res.items].sort((a, b) => {
+        if (a.is_directory !== b.is_directory) {
+          return a.is_directory ? -1 : 1;
+        }
+        let diff = 0;
+        switch (sortBy) {
+          case "name":
+            diff = a.name.localeCompare(b.name, undefined, {
+              numeric: true,
+              sensitivity: "base",
+            });
+            break;
+          case "size":
+            diff = a.size - b.size;
+            break;
+          case "modified":
+            diff = a.mtime - b.mtime;
+            break;
+          case "created":
+            diff = a.created_at - b.created_at;
+            break;
+          case "type":
+            diff = a.mime_type.localeCompare(b.mime_type);
+            break;
+          default:
+            diff = a.name.localeCompare(b.name);
+        }
+        return sortDirection === "asc" ? diff : -diff;
       });
 
+      // Filter hidden if not enabled
+      const visible = showHidden
+        ? sorted
+        : sorted.filter((e) => !e.name.startsWith("."));
+
       set({
-        entries: res.items,
+        entries: visible,
         totalEntriesCount: res.total_count,
         isLoading: false,
       });
@@ -114,7 +215,14 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
   },
 
   navigateTo: (accountId, folderId, name) => {
-    const { breadcrumbs, history, historyIndex, currentFolderId } = get();
+    const {
+      breadcrumbs,
+      history,
+      historyIndex,
+      currentFolderId,
+      tabs,
+      activeTabId,
+    } = get();
     if (folderId === currentFolderId) return;
 
     let newCrumbs: BreadcrumbItem[];
@@ -127,13 +235,30 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
     const nextHistory = history.slice(0, historyIndex + 1);
     nextHistory.push({ accountId, folderId, breadcrumbs: newCrumbs });
 
+    // Update active tab metadata
+    const updatedTabs = tabs.map((t) =>
+      t.id === activeTabId
+        ? {
+            ...t,
+            title: name,
+            accountId,
+            folderId,
+            breadcrumbs: newCrumbs,
+            history: nextHistory,
+            historyIndex: nextHistory.length - 1,
+          }
+        : t
+    );
+
     set({
+      tabs: updatedTabs,
       currentAccountId: accountId,
       currentFolderId: folderId,
       breadcrumbs: newCrumbs,
       history: nextHistory,
       historyIndex: nextHistory.length - 1,
       selectedIds: new Set(),
+      lastSelectedAnchorId: null,
       searchQuery: "",
     });
 
@@ -141,58 +266,199 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
   },
 
   goBack: () => {
-    const { history, historyIndex } = get();
+    const { history, historyIndex, tabs, activeTabId } = get();
     if (historyIndex > 0) {
       const prev = history[historyIndex - 1];
+      const updatedTabs = tabs.map((t) =>
+        t.id === activeTabId
+          ? {
+              ...t,
+              title: prev.breadcrumbs[prev.breadcrumbs.length - 1]?.name || "Folder",
+              accountId: prev.accountId,
+              folderId: prev.folderId,
+              breadcrumbs: prev.breadcrumbs,
+              historyIndex: historyIndex - 1,
+            }
+          : t
+      );
       set({
+        tabs: updatedTabs,
         currentAccountId: prev.accountId,
         currentFolderId: prev.folderId,
         breadcrumbs: prev.breadcrumbs,
         historyIndex: historyIndex - 1,
         selectedIds: new Set(),
+        lastSelectedAnchorId: null,
       });
       get().loadEntries();
     }
   },
 
   goForward: () => {
-    const { history, historyIndex } = get();
+    const { history, historyIndex, tabs, activeTabId } = get();
     if (historyIndex < history.length - 1) {
       const next = history[historyIndex + 1];
+      const updatedTabs = tabs.map((t) =>
+        t.id === activeTabId
+          ? {
+              ...t,
+              title: next.breadcrumbs[next.breadcrumbs.length - 1]?.name || "Folder",
+              accountId: next.accountId,
+              folderId: next.folderId,
+              breadcrumbs: next.breadcrumbs,
+              historyIndex: historyIndex + 1,
+            }
+          : t
+      );
       set({
+        tabs: updatedTabs,
         currentAccountId: next.accountId,
         currentFolderId: next.folderId,
         breadcrumbs: next.breadcrumbs,
         historyIndex: historyIndex + 1,
         selectedIds: new Set(),
+        lastSelectedAnchorId: null,
       });
       get().loadEntries();
     }
   },
 
   goUp: () => {
-    const { breadcrumbs } = get();
+    const { breadcrumbs, currentAccountId, tabs, activeTabId } = get();
     if (breadcrumbs.length > 1) {
       const parentCrumb = breadcrumbs[breadcrumbs.length - 2];
       const trimmedCrumbs = breadcrumbs.slice(0, -1);
+      const updatedTabs = tabs.map((t) =>
+        t.id === activeTabId
+          ? {
+              ...t,
+              title: parentCrumb.name,
+              folderId: parentCrumb.id,
+              breadcrumbs: trimmedCrumbs,
+            }
+          : t
+      );
       set({
+        tabs: updatedTabs,
         currentFolderId: parentCrumb.id,
         breadcrumbs: trimmedCrumbs,
         selectedIds: new Set(),
+        lastSelectedAnchorId: null,
       });
       get().loadEntries();
+    } else {
+      get().navigateTo(currentAccountId, null, breadcrumbs[0]?.name || "Root");
     }
   },
 
-  toggleSelect: (id, isMulti) => {
-    const { selectedIds } = get();
-    const next = new Set(isMulti ? selectedIds : []);
-    if (next.has(id)) {
-      next.delete(id);
+  openNewTab: (accountId = null, folderId = null, title = "New Tab") => {
+    const { tabs, currentAccountId } = get();
+    const effectiveAcc = accountId ?? currentAccountId;
+    const newTabId = `tab_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const crumbs: BreadcrumbItem[] = [{ id: folderId, name: title }];
+    const newTab: TabItem = {
+      id: newTabId,
+      title,
+      accountId: effectiveAcc,
+      folderId,
+      breadcrumbs: crumbs,
+      history: [{ accountId: effectiveAcc, folderId, breadcrumbs: crumbs }],
+      historyIndex: 0,
+    };
+
+    set({
+      tabs: [...tabs, newTab],
+      activeTabId: newTabId,
+      currentAccountId: effectiveAcc,
+      currentFolderId: folderId,
+      breadcrumbs: crumbs,
+      history: newTab.history,
+      historyIndex: 0,
+      selectedIds: new Set(),
+      lastSelectedAnchorId: null,
+    });
+    get().loadEntries();
+  },
+
+  closeTab: (tabId: string) => {
+    const { tabs, activeTabId } = get();
+    if (tabs.length <= 1) return; // Keep at least one tab open
+
+    const tabIndex = tabs.findIndex((t) => t.id === tabId);
+    const newTabs = tabs.filter((t) => t.id !== tabId);
+
+    if (activeTabId === tabId) {
+      const nextActiveIndex = Math.max(0, tabIndex - 1);
+      const nextActive = newTabs[nextActiveIndex];
+      set({
+        tabs: newTabs,
+        activeTabId: nextActive.id,
+        currentAccountId: nextActive.accountId,
+        currentFolderId: nextActive.folderId,
+        breadcrumbs: nextActive.breadcrumbs,
+        history: nextActive.history,
+        historyIndex: nextActive.historyIndex,
+        selectedIds: new Set(),
+        lastSelectedAnchorId: null,
+      });
+      get().loadEntries();
     } else {
-      next.add(id);
+      set({ tabs: newTabs });
     }
-    set({ selectedIds: next });
+  },
+
+  switchTab: (tabId: string) => {
+    const { tabs, activeTabId } = get();
+    if (tabId === activeTabId) return;
+
+    const targetTab = tabs.find((t) => t.id === tabId);
+    if (!targetTab) return;
+
+    set({
+      activeTabId: tabId,
+      currentAccountId: targetTab.accountId,
+      currentFolderId: targetTab.folderId,
+      breadcrumbs: targetTab.breadcrumbs,
+      history: targetTab.history,
+      historyIndex: targetTab.historyIndex,
+      selectedIds: new Set(),
+      lastSelectedAnchorId: null,
+    });
+    get().loadEntries();
+  },
+
+  toggleSelect: (id: string, isMulti: boolean, isRange = false) => {
+    const { selectedIds, entries, lastSelectedAnchorId } = get();
+    const newSelection = new Set(selectedIds);
+
+    if (isRange && lastSelectedAnchorId) {
+      // Contiguous shift-click range selection
+      const anchorIdx = entries.findIndex((e) => e.id === lastSelectedAnchorId);
+      const targetIdx = entries.findIndex((e) => e.id === id);
+
+      if (anchorIdx !== -1 && targetIdx !== -1) {
+        const start = Math.min(anchorIdx, targetIdx);
+        const end = Math.max(anchorIdx, targetIdx);
+        for (let i = start; i <= end; i++) {
+          newSelection.add(entries[i].id);
+        }
+      }
+      set({ selectedIds: newSelection });
+      return;
+    }
+
+    if (isMulti) {
+      // Ctrl/Cmd click toggle
+      if (newSelection.has(id)) {
+        newSelection.delete(id);
+      } else {
+        newSelection.add(id);
+      }
+      set({ selectedIds: newSelection, lastSelectedAnchorId: id });
+    } else {
+      // Single click
+      set({ selectedIds: new Set([id]), lastSelectedAnchorId: id });
+    }
   },
 
   selectAll: () => {
@@ -201,23 +467,24 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
   },
 
   clearSelection: () => {
-    set({ selectedIds: new Set() });
+    set({ selectedIds: new Set(), lastSelectedAnchorId: null });
   },
 
-  setViewMode: (viewMode) => set({ viewMode }),
+  setViewMode: (mode) => set({ viewMode: mode }),
 
   setSort: (by) => {
     const { sortBy, sortDirection } = get();
+    let nextDir: SortDirection = "asc";
     if (sortBy === by) {
-      set({ sortDirection: sortDirection === "asc" ? "desc" : "asc" });
-    } else {
-      set({ sortBy: by, sortDirection: "asc" });
+      nextDir = sortDirection === "asc" ? "desc" : "asc";
     }
+    set({ sortBy: by, sortDirection: nextDir });
     get().loadEntries();
   },
 
   toggleShowHidden: () => {
-    set((state) => ({ showHidden: !state.showHidden }));
+    const nextVal = !get().showHidden;
+    set({ showHidden: nextVal });
     get().loadEntries();
   },
 
@@ -226,38 +493,42 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
     get().loadEntries();
   },
 
-  hydrateItem: async (id) => {
+  hydrateItem: async (id: string) => {
     try {
-      await invokeCommand("hydrate_entry", { id });
-      get().loadEntries();
+      await invokeCommand("pin_entry", { entry_id: id });
+      await get().loadEntries();
     } catch (err) {
-      console.error("Hydration failed", err);
+      console.error("Hydration command failed", err);
     }
   },
 
-  freeUpSpaceItem: async (id) => {
+  freeUpSpaceItem: async (id: string) => {
     try {
-      await invokeCommand("free_up_space", { id });
-      get().loadEntries();
+      await invokeCommand("free_up_space", { entry_id: id });
+      await get().loadEntries();
     } catch (err) {
-      console.error("Free up space failed", err);
+      console.error("Free up space command failed", err);
     }
   },
 
-  createFolder: async (name) => {
-    const { currentFolderId } = get();
+  createFolder: async (name: string) => {
+    const { currentAccountId, currentFolderId } = get();
     try {
-      await invokeCommand("create_folder", { parent_id: currentFolderId, name });
-      get().loadEntries();
+      await invokeCommand("create_folder", {
+        account_id: currentAccountId || "acc_local",
+        parent_id: currentFolderId,
+        name,
+      });
+      await get().loadEntries();
     } catch (err) {
       console.error("Create folder failed", err);
     }
   },
 
-  renameItem: async (id, newName) => {
+  renameItem: async (id: string, newName: string) => {
     try {
       await invokeCommand("rename_entry", { id, new_name: newName });
-      get().loadEntries();
+      await get().loadEntries();
     } catch (err) {
       console.error("Rename failed", err);
     }
@@ -267,9 +538,11 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
     const { selectedIds } = get();
     if (selectedIds.size === 0) return;
     try {
-      await invokeCommand("trash_entries", { entry_ids: Array.from(selectedIds) });
-      set({ selectedIds: new Set() });
-      get().loadEntries();
+      await invokeCommand("trash_entries", {
+        entry_ids: Array.from(selectedIds),
+      });
+      set({ selectedIds: new Set(), lastSelectedAnchorId: null });
+      await get().loadEntries();
     } catch (err) {
       console.error("Trash failed", err);
     }

@@ -1,5 +1,6 @@
 pub mod dbus_file_manager;
 pub mod desktop_entry;
+pub mod hangproof_fs;
 pub mod theme;
 pub mod thumbnail;
 pub mod trash;
@@ -9,6 +10,7 @@ pub use dbus_file_manager::{
     register_file_manager_service, FileManager1Service, FileManagerRequest,
 };
 pub use desktop_entry::{DesktopEntry, DesktopEntryManager};
+pub use hangproof_fs::{HangProofFs, LocalFileMetadata};
 pub use theme::{ColorScheme, GnomeAppearance, ThemeManager};
 pub use thumbnail::{ThumbnailManager, ThumbnailSize};
 pub use trash::{TrashManager, TrashedItem};

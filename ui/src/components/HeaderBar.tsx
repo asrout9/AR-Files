@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -8,8 +8,12 @@ import {
   LayoutGrid,
   FolderPlus,
   X,
+  Eye,
+  EyeOff,
+  ArrowUpDown,
 } from "lucide-react";
 import { useExplorerStore } from "../store/useExplorerStore";
+import { SortField } from "../types";
 
 export const HeaderBar: React.FC = () => {
   const {
@@ -26,11 +30,97 @@ export const HeaderBar: React.FC = () => {
     setSearchQuery,
     createFolder,
     currentAccountId,
+    showHidden,
+    toggleShowHidden,
+    sortBy,
+    sortDirection,
+    setSort,
+    openNewTab,
+    closeTab,
+    activeTabId,
+    selectAll,
   } = useExplorerStore();
 
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
+  const [isEditingPath, setIsEditingPath] = useState(false);
+  const [pathInput, setPathInput] = useState("");
+  const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
+
+  const pathInputRef = useRef<HTMLInputElement>(null);
+
+  // Keyboard Shortcuts Handler
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+H / Cmd+H: Toggle Hidden Files
+      if ((e.ctrlKey || e.metaKey) && (e.key === "h" || e.key === "H")) {
+        e.preventDefault();
+        toggleShowHidden();
+      }
+      // Ctrl+L / Cmd+L: Edit Location
+      else if ((e.ctrlKey || e.metaKey) && (e.key === "l" || e.key === "L")) {
+        e.preventDefault();
+        const fullPath = "/" + breadcrumbs.map((b) => b.name).join("/");
+        setPathInput(fullPath);
+        setIsEditingPath(true);
+      }
+      // Ctrl+F / Cmd+F: Toggle Search
+      else if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
+        e.preventDefault();
+        setIsSearchOpen((prev) => !prev);
+      }
+      // Ctrl+T / Cmd+T: New Tab
+      else if ((e.ctrlKey || e.metaKey) && (e.key === "t" || e.key === "T")) {
+        e.preventDefault();
+        openNewTab(currentAccountId, null, "Files");
+      }
+      // Ctrl+W / Cmd+W: Close Current Tab
+      else if ((e.ctrlKey || e.metaKey) && (e.key === "w" || e.key === "W")) {
+        e.preventDefault();
+        closeTab(activeTabId);
+      }
+      // Ctrl+A / Cmd+A: Select All
+      else if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A")) {
+        if (
+          document.activeElement?.tagName !== "INPUT" &&
+          document.activeElement?.tagName !== "TEXTAREA"
+        ) {
+          e.preventDefault();
+          selectAll();
+        }
+      }
+      // Alt+Up: Go Up
+      else if (e.altKey && e.key === "ArrowUp") {
+        e.preventDefault();
+        goUp();
+      }
+      // Alt+Left: Go Back
+      else if (e.altKey && e.key === "ArrowLeft") {
+        e.preventDefault();
+        goBack();
+      }
+      // Alt+Right: Go Forward
+      else if (e.altKey && e.key === "ArrowRight") {
+        e.preventDefault();
+        goForward();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    breadcrumbs,
+    currentAccountId,
+    activeTabId,
+    toggleShowHidden,
+    openNewTab,
+    closeTab,
+    selectAll,
+    goUp,
+    goBack,
+    goForward,
+  ]);
 
   const handleCreateFolderSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,6 +130,24 @@ export const HeaderBar: React.FC = () => {
       setIsCreatingFolder(false);
     }
   };
+
+  const handlePathSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (pathInput.trim()) {
+      const parts = pathInput.trim().split("/").filter(Boolean);
+      const targetName = parts[parts.length - 1] || "Root";
+      navigateTo(currentAccountId, null, targetName);
+      setIsEditingPath(false);
+    }
+  };
+
+  const sortOptions: Array<{ field: SortField; label: string }> = [
+    { field: "name", label: "Name" },
+    { field: "size", label: "Size" },
+    { field: "modified", label: "Modified Date" },
+    { field: "created", label: "Created Date" },
+    { field: "type", label: "Type" },
+  ];
 
   return (
     <header className="adw-headerbar">
@@ -72,26 +180,66 @@ export const HeaderBar: React.FC = () => {
           <ChevronUp size={16} />
         </button>
 
-        {/* Path Bar / Breadcrumbs */}
-        <div className="adw-pathbar">
-          {breadcrumbs.map((crumb, idx) => (
-            <React.Fragment key={crumb.id ?? "root"}>
-              {idx > 0 && <span className="adw-crumb-sep">/</span>}
-              <span
-                className="adw-crumb"
-                onClick={() => navigateTo(currentAccountId, crumb.id, crumb.name)}
-              >
-                {crumb.name}
-              </span>
-            </React.Fragment>
-          ))}
-        </div>
+        {/* Path Bar / Breadcrumbs / Location Bar */}
+        {isEditingPath ? (
+          <form onSubmit={handlePathSubmit} style={{ display: "flex", flex: 1 }}>
+            <input
+              ref={pathInputRef}
+              type="text"
+              autoFocus
+              className="adw-crumb"
+              style={{
+                width: 260,
+                height: 32,
+                border: "1px solid var(--border-color)",
+                background: "var(--card-bg)",
+                padding: "0 8px",
+              }}
+              value={pathInput}
+              onChange={(e) => setPathInput(e.target.value)}
+              onBlur={() => setIsEditingPath(false)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setIsEditingPath(false);
+              }}
+            />
+          </form>
+        ) : (
+          <div
+            className="adw-pathbar"
+            onDoubleClick={() => {
+              const fullPath = "/" + breadcrumbs.map((b) => b.name).join("/");
+              setPathInput(fullPath);
+              setIsEditingPath(true);
+            }}
+            title="Click crumb to navigate, double-click or Ctrl+L to edit path"
+          >
+            {breadcrumbs.map((crumb, idx) => (
+              <React.Fragment key={crumb.id ?? "root"}>
+                {idx > 0 && <span className="adw-crumb-sep">/</span>}
+                <span
+                  className="adw-crumb"
+                  onClick={() =>
+                    navigateTo(currentAccountId, crumb.id, crumb.name)
+                  }
+                >
+                  {crumb.name}
+                </span>
+              </React.Fragment>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Center Search Input (Nautilus style) */}
       <div className="adw-headerbar-center">
         {isSearchOpen ? (
-          <div style={{ display: "flex", alignItems: "center", position: "relative" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              position: "relative",
+            }}
+          >
             <input
               type="text"
               autoFocus
@@ -107,10 +255,20 @@ export const HeaderBar: React.FC = () => {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
-            <Search size={14} style={{ position: "absolute", left: 8, color: "var(--dim-fg)" }} />
+            <Search
+              size={14}
+              style={{ position: "absolute", left: 8, color: "var(--dim-fg)" }}
+            />
             <button
               className="adw-btn adw-btn-icon"
-              style={{ position: "absolute", right: 2, height: 26, width: 26, border: "none" }}
+              style={{
+                position: "absolute",
+                right: 4,
+                width: 20,
+                height: 20,
+                padding: 0,
+                border: "none",
+              }}
               onClick={() => {
                 setSearchQuery("");
                 setIsSearchOpen(false);
@@ -134,10 +292,99 @@ export const HeaderBar: React.FC = () => {
           </button>
         )}
 
-        {/* View Mode Toggle */}
-        <div style={{ display: "flex", background: "var(--card-bg)", border: "1px solid var(--border-color)", borderRadius: 6 }}>
+        {/* Hidden Files Toggle */}
+        <button
+          className={`adw-btn adw-btn-icon ${showHidden ? "adw-btn-accent" : ""}`}
+          onClick={toggleShowHidden}
+          title={`Hidden Files: ${showHidden ? "Shown" : "Hidden"} (Ctrl+H)`}
+        >
+          {showHidden ? <Eye size={15} /> : <EyeOff size={15} />}
+        </button>
+
+        {/* Sort Menu Dropdown */}
+        <div style={{ position: "relative" }}>
           <button
-            className={`adw-btn adw-btn-icon ${viewMode === "list" ? "adw-btn-accent" : ""}`}
+            className={`adw-btn adw-btn-icon ${isSortMenuOpen ? "adw-btn-accent" : ""}`}
+            onClick={() => setIsSortMenuOpen((prev) => !prev)}
+            title={`Sort: ${sortBy} (${sortDirection})`}
+          >
+            <ArrowUpDown size={15} />
+          </button>
+
+          {isSortMenuOpen && (
+            <div
+              style={{
+                position: "absolute",
+                top: 38,
+                right: 0,
+                background: "var(--popover-bg)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "var(--adw-radius-m)",
+                boxShadow: "var(--popover-shadow)",
+                padding: "6px 0",
+                zIndex: 100,
+                minWidth: 160,
+              }}
+              onMouseLeave={() => setIsSortMenuOpen(false)}
+            >
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: "var(--dim-fg)",
+                  padding: "4px 12px",
+                  textTransform: "uppercase",
+                }}
+              >
+                Sort by
+              </div>
+              {sortOptions.map((opt) => (
+                <div
+                  key={opt.field}
+                  style={{
+                    padding: "6px 12px",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    cursor: "pointer",
+                    background:
+                      sortBy === opt.field ? "var(--hover-bg)" : "transparent",
+                    color:
+                      sortBy === opt.field
+                        ? "var(--adw-accent-blue)"
+                        : "var(--window-fg)",
+                    fontSize: 13,
+                  }}
+                  onClick={() => {
+                    setSort(opt.field);
+                    setIsSortMenuOpen(false);
+                  }}
+                >
+                  <span>{opt.label}</span>
+                  {sortBy === opt.field && (
+                    <span style={{ fontSize: 11 }}>
+                      {sortDirection === "asc" ? "▲" : "▼"}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* View Mode Toggle */}
+        <div
+          style={{
+            display: "flex",
+            background: "var(--card-bg)",
+            border: "1px solid var(--border-color)",
+            borderRadius: 6,
+          }}
+        >
+          <button
+            className={`adw-btn adw-btn-icon ${
+              viewMode === "list" ? "adw-btn-accent" : ""
+            }`}
             style={{ border: "none", height: 30, width: 30 }}
             onClick={() => setViewMode("list")}
             title="List View"
@@ -145,7 +392,9 @@ export const HeaderBar: React.FC = () => {
             <ListIcon size={15} />
           </button>
           <button
-            className={`adw-btn adw-btn-icon ${viewMode === "grid" ? "adw-btn-accent" : ""}`}
+            className={`adw-btn adw-btn-icon ${
+              viewMode === "grid" ? "adw-btn-accent" : ""
+            }`}
             style={{ border: "none", height: 30, width: 30 }}
             onClick={() => setViewMode("grid")}
             title="Grid View"
@@ -175,7 +424,7 @@ export const HeaderBar: React.FC = () => {
         </div>
       </div>
 
-      {/* New Folder Modal Prompt */}
+      {/* New Folder Dialog */}
       {isCreatingFolder && (
         <div
           style={{
@@ -221,7 +470,9 @@ export const HeaderBar: React.FC = () => {
                 outline: "none",
               }}
             />
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <div
+              style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}
+            >
               <button
                 type="button"
                 className="adw-btn"

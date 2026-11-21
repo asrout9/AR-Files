@@ -134,3 +134,19 @@ pub fn create_vfs_for_account(
 ) -> cirrus_vfs::CirrusVfs {
     cirrus_vfs::CirrusVfs::new(account_id, mount_point, state.entries_repo.clone())
 }
+
+pub async fn list_local_directory(state: &AppState, path: String) -> Result<Vec<EntryRecord>> {
+    let local_entries = state.hangproof_fs.read_dir_hangproof(&path).await?;
+    let records = local_entries
+        .into_iter()
+        .map(|meta| meta.to_entry_record("acc_local", Some(path.clone()), "local"))
+        .collect();
+    Ok(records)
+}
+
+pub async fn stat_local_file(
+    state: &AppState,
+    path: String,
+) -> Result<cirrus_platform::LocalFileMetadata> {
+    state.hangproof_fs.stat_hangproof(&path).await
+}

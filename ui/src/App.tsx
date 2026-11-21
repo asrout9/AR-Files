@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { HeaderBar } from "./components/HeaderBar";
 import { Sidebar } from "./components/Sidebar";
+import { TabBar } from "./components/TabBar";
 import { ListView } from "./components/ListView";
 import { GridView } from "./components/GridView";
 import { ContextMenu } from "./components/ContextMenu";
@@ -57,14 +58,25 @@ export const App: React.FC = () => {
         {/* Left Sidebar */}
         <Sidebar />
 
-        {/* Viewport (List / Grid) */}
-        <main className="adw-viewport">
-          {viewMode === "list" ? (
-            <ListView onContextMenu={handleContextMenu} />
-          ) : (
-            <GridView onContextMenu={handleContextMenu} />
-          )}
-        </main>
+        {/* Viewport Column with TabBar */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            flex: 1,
+            minWidth: 0,
+            height: "100%",
+          }}
+        >
+          <TabBar />
+          <main className="adw-viewport" style={{ flex: 1 }}>
+            {viewMode === "list" ? (
+              <ListView onContextMenu={handleContextMenu} />
+            ) : (
+              <GridView onContextMenu={handleContextMenu} />
+            )}
+          </main>
+        </div>
       </div>
 
       {/* Context Menu */}
