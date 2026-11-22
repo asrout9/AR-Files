@@ -1,0 +1,1770 @@
+#!/usr/bin/env python3
+"""
+AR Files - Desktop File Manager for Fedora Workstation (GNOME / Libadwaita)
+"""
+
+import sys
+import os
+import json
+import mimetypes
+import subprocess
+import time
+import socket
+import hashlib
+import threading
+import sqlite3
+import re
+from urllib.parse import quote
+from collections import defaultdict
+import gi
+
+def normalize_stem(name):
+    s = name.strip().lstrip('#').strip()
+    dot = s.rfind('.')
+    ext = ''
+    stem = s
+    if dot > 0:
+        stem = s[:dot]
+        ext = s[dot:].lower()
+    stem = re.sub(r'\s*\(\d+\)$', '', stem)
+    stem = re.sub(r'[\s_-]*copy$', '', stem, flags=re.IGNORECASE)
+    stem = re.sub(r'\s*\([Rr]ecovered\)$', '', stem)
+    return stem.lower().strip() + ext
+
+gi.require_version('Gtk', '4.0')
+gi.require_version('Adw', '1')
+gi.require_version('WebKit', '6.0')
+try:
+    gi.require_version('GnomeDesktop', '4.0')
+    from gi.repository import GnomeDesktop
+    HAS_GNOME_DESKTOP = True
+except Exception:
+    HAS_GNOME_DESKTOP = False
+
+from gi.repository import Gtk, Adw, WebKit, GLib, Gio, Gdk, JavaScriptCore
+
+class ARFilesApplication(Adw.Application):
+    def __init__(self):
+        super().__init__(
+            application_id='org.arfiles.ARFiles',
+            flags=Gio.ApplicationFlags.HANDLES_OPEN
+        )
+        self.backend_proc = None
+        self.thumbnail_factory = None
+        self.webview = None
+        self.main_window = None
+        self.volume_monitor = None
+        self.pending_picker_invocations = {}
+        self.session_bus = None
+        self.filemanager1_owner_id = None
+        if HAS_GNOME_DESKTOP:
+            try:
+                self.thumbnail_factory = GnomeDesktop.DesktopThumbnailFactory.new(GnomeDesktop.DesktopThumbnailSize.LARGE)
+            except Exception as e:
+                print(f"[AR Files] ThumbnailFactory init error: {e}", file=sys.stderr)
+
+    def resolve_thumbnail(self, path, mime=None, mtime=None):
+        if not path or not os.path.exists(path):
+            return None
+        ext = os.path.splitext(path)[1].lower()
+        if ext in ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.bmp', '.ico', '.avif'):
+            return f"file://{path}"
+
+        try:
+            abs_path = os.path.abspath(path)
+            uri = f"file://{quote(abs_path)}"
+            if mtime is None:
+                mtime = int(os.path.getmtime(abs_path))
+
+            if self.thumbnail_factory:
+                cached = self.thumbnail_factory.lookup(uri, mtime)
+                if cached and os.path.exists(cached):
+                    return f"file://{cached}"
+
+                if not mime:
+                    mime = mimetypes.guess_type(abs_path)[0] or "application/octet-stream"
+
+                if self.thumbnail_factory.can_thumbnail(uri, mime, mtime):
+                    try:
+                        pix = self.thumbnail_factory.generate_thumbnail(uri, mime)
+                        if pix:
+                            self.thumbnail_factory.save_thumbnail(pix, uri, mtime)
+                            cached = self.thumbnail_factory.lookup(uri, mtime)
+                            if cached and os.path.exists(cached):
+                                return f"file://{cached}"
+                    except Exception:
+                        pass
+
+            # Freedesktop standard thumbnail cache lookup
+            h = hashlib.md5(uri.encode('utf-8')).hexdigest()
+            for s in ('large', 'normal', 'x-large'):
+                tp = os.path.expanduser(f"~/.cache/thumbnails/{s}/{h}.png")
+                if os.path.exists(tp):
+                    return f"file://{tp}"
+        except Exception:
+            pass
+        return None
+
+    def notify_devices_changed(self):
+        def _do_eval():
+            if getattr(self, 'webview', None):
+                try:
+                    self.webview.evaluate_javascript(
+                        "window.dispatchEvent(new CustomEvent('ar-devices-changed'))",
+                        -1, None, None, None, None, None
+                    )
+                except Exception:
+                    pass
+            return False
+        GLib.idle_add(_do_eval)
+
+    def setup_volume_monitor(self):
+        try:
+            self.volume_monitor = Gio.VolumeMonitor.get()
+            if self.volume_monitor:
+                def on_vol_added(monitor, vol):
+                    self.auto_mount_volume(vol)
+                    self.notify_devices_changed()
+
+                def on_change(monitor, *args):
+                    self.notify_devices_changed()
+
+                self.volume_monitor.connect('volume-added', on_vol_added)
+                self.volume_monitor.connect('volume-removed', on_change)
+                self.volume_monitor.connect('volume-changed', on_change)
+                self.volume_monitor.connect('mount-added', on_change)
+                self.volume_monitor.connect('mount-removed', on_change)
+                self.volume_monitor.connect('mount-changed', on_change)
+                self.volume_monitor.connect('drive-connected', on_change)
+                self.volume_monitor.connect('drive-disconnected', on_change)
+
+                # Attempt auto-mount for any unmounted volumes already attached
+                for v in self.volume_monitor.get_volumes():
+                    if v.get_mount() is None and v.can_mount():
+                        self.auto_mount_volume(v)
+        except Exception as e:
+            print(f"[AR Files] Volume monitor init error: {e}", file=sys.stderr)
+
+    def auto_mount_volume(self, volume):
+        if not volume:
+            return
+        try:
+            if volume.get_mount() is not None:
+                return
+            if not volume.can_mount():
+                return
+            print(f"[AR Files] Auto-mounting external volume: {volume.get_name()}", file=sys.stderr)
+            def on_mount_done(vol, res, user_data):
+                try:
+                    vol.mount_finish(res)
+                    print(f"[AR Files] Successfully auto-mounted: {vol.get_name()}", file=sys.stderr)
+                except Exception as me:
+                    print(f"[AR Files] GIO auto-mount note for {vol.get_name()}: {me}", file=sys.stderr)
+                    dev = vol.get_identifier('unix-device')
+                    if dev:
+                        subprocess.Popen(['udisksctl', 'mount', '-b', dev], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.notify_devices_changed()
+
+            volume.mount(Gio.MountMountFlags.NONE, Gio.MountOperation.new(), None, on_mount_done, None)
+        except Exception as ex:
+            try:
+                dev = volume.get_identifier('unix-device')
+                if dev:
+                    subprocess.Popen(['udisksctl', 'mount', '-b', dev], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+            self.notify_devices_changed()
+
+    def get_system_devices(self):
+        devices = []
+        seen_paths = set()
+
+        if not self.volume_monitor:
+            try:
+                self.volume_monitor = Gio.VolumeMonitor.get()
+            except Exception:
+                pass
+
+        # 1. Primary Root Filesystem
+        try:
+            root_stat = os.statvfs('/')
+            total = root_stat.f_blocks * root_stat.f_frsize
+            free = root_stat.f_bavail * root_stat.f_frsize
+            used = total - free
+        except Exception:
+            total, used, free = 0, 0, 0
+
+        devices.append({
+            "id": "dev_root",
+            "name": "Fedora Linux (/)",
+            "mount_path": "/",
+            "device_type": "root",
+            "is_removable": False,
+            "is_mounted": True,
+            "can_unmount": False,
+            "can_eject": False,
+            "total_bytes": total,
+            "used_bytes": used,
+            "free_bytes": free,
+            "device_node": "/dev/root",
+        })
+        seen_paths.add('/')
+
+        # 2. Query GIO Mounts
+        if self.volume_monitor:
+            for m in self.volume_monitor.get_mounts():
+                try:
+                    root = m.get_root()
+                    p = root.get_path() if root else None
+                    if not p or p in seen_paths:
+                        continue
+                    if p.startswith(('/proc', '/sys', '/dev', '/boot', '/run/user')):
+                        continue
+                    seen_paths.add(p)
+
+                    v = m.get_volume()
+                    d = m.get_drive()
+                    dev_node = v.get_identifier('unix-device') if v else None
+
+                    t, u, f = 0, 0, 0
+                    try:
+                        st = os.statvfs(p)
+                        t = st.f_blocks * st.f_frsize
+                        f = st.f_bavail * st.f_frsize
+                        u = t - f
+                    except Exception:
+                        pass
+
+                    is_removable = bool((d and d.is_removable()) or (v and v.should_automount()) or p.startswith(('/run/media', '/media')))
+                    name = m.get_name() or os.path.basename(p) or "Removable Drive"
+
+                    devices.append({
+                        "id": f"mount_{p}",
+                        "name": name,
+                        "mount_path": p,
+                        "device_type": "removable" if is_removable else "drive",
+                        "is_removable": is_removable,
+                        "is_mounted": True,
+                        "can_unmount": m.can_unmount(),
+                        "can_eject": bool(m.can_eject() or (d and d.can_eject())),
+                        "total_bytes": t,
+                        "used_bytes": u,
+                        "free_bytes": f,
+                        "device_node": dev_node,
+                    })
+                except Exception:
+                    continue
+
+            # 3. Unmounted volumes
+            for v in self.volume_monitor.get_volumes():
+                try:
+                    if v.get_mount() is not None:
+                        continue
+                    dev_node = v.get_identifier('unix-device')
+                    d = v.get_drive()
+                    is_remov = bool((d and d.is_removable()) or v.should_automount())
+                    devices.append({
+                        "id": f"vol_{v.get_uuid() or v.get_name()}",
+                        "name": v.get_name() or "External Device",
+                        "mount_path": "",
+                        "device_type": "removable" if is_remov else "drive",
+                        "is_removable": is_remov,
+                        "is_mounted": False,
+                        "can_unmount": False,
+                        "can_eject": bool(v.can_eject() or (d and d.can_eject())),
+                        "total_bytes": 0,
+                        "used_bytes": 0,
+                        "free_bytes": 0,
+                        "device_node": dev_node,
+                    })
+                except Exception:
+                    continue
+
+        # 4. Fallback check for /run/media/$USER or /media
+        try:
+            user_name = os.environ.get('USER') or os.path.basename(os.path.expanduser('~'))
+            candidate_dirs = [f"/run/media/{user_name}", f"/media/{user_name}", "/media"]
+            for cdir in candidate_dirs:
+                if os.path.isdir(cdir):
+                    with os.scandir(cdir) as it:
+                        for entry in it:
+                            try:
+                                if entry.is_dir(follow_symlinks=False) and entry.path not in seen_paths:
+                                    if os.path.ismount(entry.path):
+                                        seen_paths.add(entry.path)
+                                        t, u, f = 0, 0, 0
+                                        try:
+                                            st = os.statvfs(entry.path)
+                                            t = st.f_blocks * st.f_frsize
+                                            f = st.f_bavail * st.f_frsize
+                                            u = t - f
+                                        except Exception:
+                                            pass
+                                        devices.append({
+                                            "id": f"mount_{entry.path}",
+                                            "name": entry.name,
+                                            "mount_path": entry.path,
+                                            "device_type": "removable",
+                                            "is_removable": True,
+                                            "is_mounted": True,
+                                            "can_unmount": True,
+                                            "can_eject": False,
+                                            "total_bytes": t,
+                                            "used_bytes": u,
+                                            "free_bytes": f,
+                                            "device_node": None,
+                                        })
+                            except Exception:
+                                continue
+        except Exception:
+            pass
+
+        return devices
+
+    def unmount_device(self, mount_path, device_node=None):
+        if not mount_path and not device_node:
+            return {"success": False, "error": "No mount path or device node specified"}
+        if mount_path == "/":
+            return {"success": False, "error": "Cannot unmount root filesystem"}
+
+        err = None
+        if mount_path:
+            try:
+                proc = subprocess.run(["gio", "mount", "-u", mount_path], capture_output=True, text=True, timeout=10)
+                if proc.returncode == 0:
+                    self.notify_devices_changed()
+                    return {"success": True}
+                err = proc.stderr or proc.stdout
+            except Exception as e:
+                err = str(e)
+
+        if device_node:
+            try:
+                proc = subprocess.run(["udisksctl", "unmount", "-b", device_node], capture_output=True, text=True, timeout=10)
+                if proc.returncode == 0:
+                    self.notify_devices_changed()
+                    return {"success": True}
+                err = proc.stderr or proc.stdout
+            except Exception as e:
+                err = str(e)
+
+        self.notify_devices_changed()
+        return {"success": False, "error": err or "Failed to unmount device"}
+
+    def eject_device(self, mount_path, device_node=None):
+        if not mount_path and not device_node:
+            return {"success": False, "error": "No mount path or device node specified"}
+        if mount_path == "/":
+            return {"success": False, "error": "Cannot eject root filesystem"}
+
+        err = None
+        if mount_path:
+            try:
+                proc = subprocess.run(["gio", "mount", "-e", mount_path], capture_output=True, text=True, timeout=10)
+                if proc.returncode == 0:
+                    self.notify_devices_changed()
+                    return {"success": True}
+                err = proc.stderr or proc.stdout
+            except Exception as e:
+                err = str(e)
+
+        if device_node:
+            try:
+                proc = subprocess.run(["udisksctl", "power-off", "-b", device_node], capture_output=True, text=True, timeout=10)
+                if proc.returncode == 0:
+                    self.notify_devices_changed()
+                    return {"success": True}
+                err = proc.stderr or proc.stdout
+            except Exception as e:
+                err = str(e)
+
+        self.notify_devices_changed()
+        return {"success": False, "error": err or "Failed to eject device"}
+
+    def mount_device(self, device_node=None, device_id=None):
+        target = device_node or device_id
+        if not target:
+            return {"success": False, "error": "No device node or identifier specified"}
+
+        if self.volume_monitor:
+            for v in self.volume_monitor.get_volumes():
+                try:
+                    if v.get_identifier('unix-device') == target or (v.get_uuid() and v.get_uuid() in target) or v.get_name() == target:
+                        if v.can_mount():
+                            def on_mounted(vol, res, user_data):
+                                try:
+                                    vol.mount_finish(res)
+                                except Exception:
+                                    pass
+                                self.notify_devices_changed()
+                            v.mount(Gio.MountMountFlags.NONE, Gio.MountOperation.new(), None, on_mounted, None)
+                            return {"success": True}
+                except Exception:
+                    pass
+
+        try:
+            proc = subprocess.run(["udisksctl", "mount", "-b", target], capture_output=True, text=True, timeout=10)
+            if proc.returncode == 0:
+                self.notify_devices_changed()
+                return {"success": True}
+            return {"success": False, "error": proc.stderr or proc.stdout}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def ensure_backend_running(self):
+        backend_bin = os.path.expanduser('~/.local/bin/ar-files-backend')
+        sock_path = os.path.expanduser('~/.local/share/ar-files/ipc.sock')
+
+        if os.path.exists(sock_path):
+            try:
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.settimeout(0.5)
+                s.connect(sock_path)
+                s.close()
+                return
+            except Exception:
+                try:
+                    os.remove(sock_path)
+                except Exception:
+                    pass
+
+        if os.path.isfile(backend_bin) and os.access(backend_bin, os.X_OK):
+            try:
+                self.backend_proc = subprocess.Popen(
+                    [backend_bin],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                # Wait for socket to bind
+                for _ in range(25):
+                    if os.path.exists(sock_path):
+                        break
+                    time.sleep(0.1)
+            except Exception as e:
+                print(f"[AR Files] Backend start note: {e}", file=sys.stderr)
+
+    def send_backend_ipc(self, cmd, args, timeout=40.0):
+        if cmd in ("start_google_oauth", "update_account_credentials", "add_onedrive_account"):
+            timeout = 135.0
+        self.ensure_backend_running()
+        sock_path = os.path.expanduser('~/.local/share/ar-files/ipc.sock')
+        if not os.path.exists(sock_path):
+            return {"success": False, "error": "AR Files backend daemon is not running."}
+
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect(sock_path)
+            req = json.dumps({"cmd": cmd, "args": args}) + "\n"
+            s.sendall(req.encode('utf-8'))
+
+            buf = b""
+            while not buf.endswith(b"\n"):
+                chunk = s.recv(8192)
+                if not chunk:
+                    break
+                buf += chunk
+            s.close()
+
+            if buf:
+                return json.loads(buf.decode('utf-8'))
+        except socket.timeout:
+            return {"success": False, "error": "Operation timed out waiting for backend."}
+        except Exception as e:
+            return {"success": False, "error": f"Backend communication error: {e}"}
+
+        return {"success": False, "error": "Empty response from backend."}
+
+    def do_startup(self):
+        Adw.Application.do_startup(self)
+        self.hold()
+        self.ensure_backend_running()
+        self.setup_volume_monitor()
+        self.setup_dbus_services()
+
+    def setup_dbus_services(self):
+        try:
+            self.session_bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            if not self.session_bus:
+                return
+
+            # Gracefully stop nautilus if running so AR Files owns org.freedesktop.FileManager1
+            try:
+                subprocess.Popen(['nautilus', '-q'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+
+            # 1. Register org.freedesktop.FileManager1 interface
+            fm1_xml = """<node>
+              <interface name="org.freedesktop.FileManager1">
+                <method name="ShowFolders">
+                  <arg type="as" name="URIs" direction="in"/>
+                  <arg type="s" name="StartupId" direction="in"/>
+                </method>
+                <method name="ShowItems">
+                  <arg type="as" name="URIs" direction="in"/>
+                  <arg type="s" name="StartupId" direction="in"/>
+                </method>
+                <method name="ShowItemProperties">
+                  <arg type="as" name="URIs" direction="in"/>
+                  <arg type="s" name="StartupId" direction="in"/>
+                </method>
+              </interface>
+            </node>"""
+            fm1_node = Gio.DBusNodeInfo.new_for_xml(fm1_xml)
+
+            def on_fm1_method(conn, sender, path, iface, method, params, invocation):
+                try:
+                    unpacked = params.unpack()
+                    uris = unpacked[0] if unpacked else []
+                    if method == "ShowFolders":
+                        for u in uris:
+                            f = Gio.File.new_for_uri(u)
+                            p = f.get_path()
+                            if p:
+                                self.open_path_in_app(p)
+                                break
+                    elif method == "ShowItems":
+                        for u in uris:
+                            f = Gio.File.new_for_uri(u)
+                            p = f.get_path()
+                            if p:
+                                folder = os.path.dirname(p)
+                                item = os.path.basename(p)
+                                self.open_path_in_app(folder, select_item=item)
+                                break
+                    elif method == "ShowItemProperties":
+                        for u in uris:
+                            f = Gio.File.new_for_uri(u)
+                            p = f.get_path()
+                            if p:
+                                folder = os.path.dirname(p)
+                                item = os.path.basename(p)
+                                self.open_path_in_app(folder, select_item=item, show_properties=True)
+                                break
+                except Exception as e:
+                    print(f"[AR Files] FileManager1 {method} error: {e}", file=sys.stderr)
+                invocation.return_value(None)
+
+            self.session_bus.register_object(
+                "/org/freedesktop/FileManager1",
+                fm1_node.interfaces[0],
+                on_fm1_method,
+                None, None
+            )
+
+            # Claim well-known bus name org.freedesktop.FileManager1
+            self.filemanager1_owner_id = Gio.bus_own_name_on_connection(
+                self.session_bus,
+                "org.freedesktop.FileManager1",
+                Gio.BusNameOwnerFlags.REPLACE | Gio.BusNameOwnerFlags.ALLOW_REPLACEMENT,
+                None, None
+            )
+
+            # 2. Register org.freedesktop.impl.portal.FileChooser interface
+            fc_xml = """<node>
+              <interface name="org.freedesktop.impl.portal.FileChooser">
+                <method name="OpenFile">
+                  <arg type="o" name="handle" direction="in"/>
+                  <arg type="s" name="app_id" direction="in"/>
+                  <arg type="s" name="parent_window" direction="in"/>
+                  <arg type="s" name="title" direction="in"/>
+                  <arg type="a{sv}" name="options" direction="in"/>
+                  <arg type="u" name="response" direction="out"/>
+                  <arg type="a{sv}" name="results" direction="out"/>
+                </method>
+                <method name="SaveFile">
+                  <arg type="o" name="handle" direction="in"/>
+                  <arg type="s" name="app_id" direction="in"/>
+                  <arg type="s" name="parent_window" direction="in"/>
+                  <arg type="s" name="title" direction="in"/>
+                  <arg type="a{sv}" name="options" direction="in"/>
+                  <arg type="u" name="response" direction="out"/>
+                  <arg type="a{sv}" name="results" direction="out"/>
+                </method>
+                <method name="SaveFiles">
+                  <arg type="o" name="handle" direction="in"/>
+                  <arg type="s" name="app_id" direction="in"/>
+                  <arg type="s" name="parent_window" direction="in"/>
+                  <arg type="s" name="title" direction="in"/>
+                  <arg type="a{sv}" name="options" direction="in"/>
+                  <arg type="u" name="response" direction="out"/>
+                  <arg type="a{sv}" name="results" direction="out"/>
+                </method>
+              </interface>
+            </node>"""
+            fc_node = Gio.DBusNodeInfo.new_for_xml(fc_xml)
+
+            def on_portal_filechooser_method(conn, sender, path, iface, method, params, invocation):
+                try:
+                    handle, app_id, parent_window, title, options = params.unpack()
+                    if method == "OpenFile":
+                        multiple = bool(options.get('multiple', False))
+                        directory = bool(options.get('directory', False))
+                        accept_label = str(options.get('accept_label', ''))
+                        cf = options.get('current_folder')
+                        current_folder = cf.rstrip(b'\x00').decode('utf-8', errors='ignore') if isinstance(cf, bytes) else str(cf or '')
+                        def _show_open():
+                            self.create_picker_window(
+                                handle=handle, app_id=app_id, title=title or "Open File",
+                                mode="open", multiple=multiple, directory=directory,
+                                current_folder=current_folder, accept_label=accept_label,
+                                invocation=invocation
+                            )
+                            return False
+                        GLib.idle_add(_show_open)
+                    elif method == "SaveFile":
+                        current_name = str(options.get('current_name', ''))
+                        accept_label = str(options.get('accept_label', ''))
+                        cf = options.get('current_folder')
+                        current_folder = cf.rstrip(b'\x00').decode('utf-8', errors='ignore') if isinstance(cf, bytes) else str(cf or '')
+                        def _show_save():
+                            self.create_picker_window(
+                                handle=handle, app_id=app_id, title=title or "Save File",
+                                mode="save", current_name=current_name, current_folder=current_folder,
+                                accept_label=accept_label, invocation=invocation
+                            )
+                            return False
+                        GLib.idle_add(_show_save)
+                    elif method == "SaveFiles":
+                        accept_label = str(options.get('accept_label', ''))
+                        cf = options.get('current_folder')
+                        current_folder = cf.rstrip(b'\x00').decode('utf-8', errors='ignore') if isinstance(cf, bytes) else str(cf or '')
+                        def _show_save_files():
+                            self.create_picker_window(
+                                handle=handle, app_id=app_id, title=title or "Save Files",
+                                mode="save_files", current_folder=current_folder,
+                                accept_label=accept_label, invocation=invocation
+                            )
+                            return False
+                        GLib.idle_add(_show_save_files)
+                except Exception as e:
+                    print(f"[AR Files] Portal FileChooser {method} error: {e}", file=sys.stderr)
+                    invocation.return_value(GLib.Variant('(ua{sv})', (2, {})))
+
+            self.session_bus.register_object(
+                "/org/freedesktop/portal/desktop",
+                fc_node.interfaces[0],
+                on_portal_filechooser_method,
+                None, None
+            )
+
+        except Exception as ex:
+            print(f"[AR Files] setup_dbus_services error: {ex}", file=sys.stderr)
+
+    def open_path_in_app(self, folder_path, select_item=None, show_properties=False):
+        folder_path = os.path.abspath(os.path.expanduser(folder_path or '~'))
+        if not self.main_window or not self.webview:
+            self.create_window(target_path=folder_path, select_item=select_item)
+            return
+
+        payload = {
+            "path": folder_path,
+            "select_name": select_item,
+            "show_properties": show_properties
+        }
+        js_code = f"window.dispatchEvent(new CustomEvent('ar-open-path', {{ detail: {json.dumps(payload)} }}));"
+        def _do_nav():
+            if self.webview:
+                try:
+                    self.webview.evaluate_javascript(js_code, -1, None, None, None, None, None)
+                except Exception:
+                    pass
+            if self.main_window:
+                self.main_window.present()
+            return False
+        GLib.idle_add(_do_nav)
+
+    def do_activate(self):
+        self.create_window()
+
+    def do_open(self, files, hint):
+        target_folder = None
+        select_item = None
+        if files:
+            try:
+                p = files[0].get_path()
+                if p:
+                    if os.path.isfile(p):
+                        target_folder = os.path.dirname(p)
+                        select_item = os.path.basename(p)
+                    else:
+                        target_folder = p
+            except Exception:
+                pass
+        self.open_path_in_app(target_folder or os.path.expanduser('~'), select_item=select_item)
+
+    def create_picker_window(self, handle, app_id, title, mode, multiple=False, directory=False, current_folder=None, current_name="", accept_label="", invocation=None):
+        win = Adw.ApplicationWindow(application=self, title=title or "Select File")
+        win.set_default_size(960, 620)
+        win.set_icon_name('org.arfiles.ARFiles')
+
+        webview = WebKit.WebView()
+        manager = webview.get_user_content_manager()
+
+        user_home = os.path.expanduser('~')
+        initial_path = current_folder if (current_folder and os.path.exists(current_folder)) else user_home
+
+        picker_meta = {
+            "active": True,
+            "mode": mode,
+            "multiple": multiple,
+            "directory": directory,
+            "title": title,
+            "current_name": current_name,
+            "accept_label": accept_label,
+            "handle": handle
+        }
+
+        scripts = (
+            f'window.__USER_HOME__ = {json.dumps(user_home)};\n'
+            f'window.__INITIAL_PATH__ = {json.dumps(initial_path)};\n'
+            f'window.__PICKER_MODE__ = {json.dumps(picker_meta)};'
+        )
+        manager.add_script(WebKit.UserScript.new(
+            scripts,
+            WebKit.UserContentInjectedFrames.TOP_FRAME,
+            WebKit.UserScriptInjectionTime.START,
+            None, None
+        ))
+
+        manager.register_script_message_handler('window_action')
+        def on_window_action(mgr, js_result):
+            try:
+                action = js_result.to_string()
+            except Exception:
+                action = ""
+            if action == "close":
+                win.close()
+            elif action == "minimize":
+                win.minimize()
+            elif action == "maximize":
+                if win.is_maximized():
+                    win.unmaximize()
+                else:
+                    win.maximize()
+        manager.connect('script-message-received::window_action', on_window_action)
+
+        manager.register_script_message_handler_with_reply('ar_ipc')
+        def on_ar_ipc(mgr, js_value, reply):
+            try:
+                raw_str = js_value.to_string()
+                payload = json.loads(raw_str)
+                cmd = payload.get("cmd")
+                args = payload.get("args", {})
+                ctx = js_value.get_context()
+            except Exception as e:
+                ctx = js_value.get_context()
+                reply.return_value(JavaScriptCore.Value.new_from_json(ctx, json.dumps({"error": str(e)})))
+                return True
+
+            def run_ipc():
+                try:
+                    response = self.handle_ipc_command(cmd, args)
+                except Exception as ex:
+                    response = {"success": False, "error": str(ex)}
+
+                def send_reply():
+                    try:
+                        val = JavaScriptCore.Value.new_from_json(ctx, json.dumps(response))
+                        reply.return_value(val)
+                    except Exception as rex:
+                        print(f"[AR Files] Picker IPC reply error for {cmd}: {rex}", file=sys.stderr)
+                    return False
+
+                GLib.idle_add(send_reply)
+
+            threading.Thread(target=run_ipc, daemon=True).start()
+            return True
+
+        manager.connect('script-message-with-reply-received::ar_ipc', on_ar_ipc)
+
+        settings = webview.get_settings()
+        settings.set_allow_file_access_from_file_urls(True)
+        settings.set_allow_universal_access_from_file_urls(True)
+        settings.set_enable_developer_extras(True)
+        settings.set_enable_javascript(True)
+
+        ui_path = os.path.expanduser('~/.local/share/ar-files/ui/index.html')
+        if not os.path.exists(ui_path):
+            workspace_ui = '/run/media/abhi/My Data Drive/Projects/TAURI-RUST/AR-Files/ui/dist/index.html'
+            if os.path.exists(workspace_ui):
+                ui_path = workspace_ui
+
+        webview.load_uri(f'file://{ui_path}')
+        win.set_content(webview)
+
+        self.pending_picker_invocations[handle] = (invocation, win)
+
+        def on_close(w):
+            if handle in self.pending_picker_invocations:
+                inv, _ = self.pending_picker_invocations.pop(handle)
+                try:
+                    inv.return_value(GLib.Variant('(ua{sv})', (1, {})))
+                except Exception:
+                    pass
+            return False
+        win.connect('close-request', on_close)
+
+        win.present()
+
+    def create_window(self, target_path=None, select_item=None):
+        if self.main_window:
+            if target_path:
+                self.open_path_in_app(target_path, select_item=select_item)
+            else:
+                self.main_window.present()
+            return
+
+        win = Adw.ApplicationWindow(application=self, title='AR Files')
+        self.main_window = win
+        win.set_default_size(1140, 740)
+        win.set_icon_name('org.arfiles.ARFiles')
+
+        # Create UserContentManager and WebKitGTK 6.0 WebView
+        webview = WebKit.WebView()
+        self.webview = webview
+        manager = webview.get_user_content_manager()
+
+        user_home = os.path.expanduser('~')
+        init_p = target_path if (target_path and os.path.exists(target_path)) else user_home
+        init_scripts = f'window.__USER_HOME__ = {json.dumps(user_home)};\nwindow.__INITIAL_PATH__ = {json.dumps(init_p)};'
+        if select_item:
+            init_scripts += f'\nwindow.__INITIAL_SELECT__ = {json.dumps(select_item)};'
+
+        home_script = WebKit.UserScript.new(
+            init_scripts,
+            WebKit.UserContentInjectedFrames.TOP_FRAME,
+            WebKit.UserScriptInjectionTime.START,
+            None, None
+        )
+        manager.add_script(home_script)
+
+        win._is_maximized = win.is_maximized()
+        def on_maximized_changed(w, pspec):
+            win._is_maximized = w.is_maximized()
+        win.connect('notify::maximized', on_maximized_changed)
+
+        def on_main_win_close(w):
+            self.main_window = None
+            self.webview = None
+            return False
+        win.connect('close-request', on_main_win_close)
+
+        # Window actions: close, minimize, maximize, drag
+        manager.register_script_message_handler('window_action')
+        def on_window_action(mgr, js_result):
+            try:
+                action = js_result.to_string()
+            except Exception:
+                action = ""
+
+            if action == "close":
+                win.close()
+            elif action == "minimize":
+                win.minimize()
+            elif action == "maximize":
+                if win.is_maximized() or getattr(win, '_is_maximized', False):
+                    win.unmaximize()
+                    win._is_maximized = False
+                else:
+                    win.maximize()
+                    win._is_maximized = True
+            elif action == "drag":
+                surface = win.get_surface()
+                if surface and hasattr(surface, "begin_move"):
+                    disp = Gdk.Display.get_default()
+                    seat = disp.get_default_seat() if disp else None
+                    device = seat.get_pointer() if seat else None
+                    if device:
+                        surface.begin_move(device, 1, 0, 0, Gdk.CURRENT_TIME)
+
+        manager.connect('script-message-received::window_action', on_window_action)
+
+        # Bi-directional IPC Handler
+        manager.register_script_message_handler_with_reply('ar_ipc')
+        def on_ar_ipc(mgr, js_value, reply):
+            try:
+                raw_str = js_value.to_string()
+                payload = json.loads(raw_str)
+                cmd = payload.get("cmd")
+                args = payload.get("args", {})
+                ctx = js_value.get_context()
+            except Exception as e:
+                ctx = js_value.get_context()
+                reply.return_value(JavaScriptCore.Value.new_from_json(ctx, json.dumps({"error": str(e)})))
+                return True
+
+            def run_ipc():
+                try:
+                    response = self.handle_ipc_command(cmd, args)
+                except Exception as ex:
+                    response = {"success": False, "error": str(ex)}
+
+                def send_reply():
+                    try:
+                        val = JavaScriptCore.Value.new_from_json(ctx, json.dumps(response))
+                        reply.return_value(val)
+                    except Exception as rex:
+                        print(f"[AR Files] IPC reply error for {cmd}: {rex}", file=sys.stderr)
+                    return False
+
+                GLib.idle_add(send_reply)
+
+            threading.Thread(target=run_ipc, daemon=True).start()
+            return True
+
+        manager.connect('script-message-with-reply-received::ar_ipc', on_ar_ipc)
+
+        # Settings
+        settings = webview.get_settings()
+        settings.set_allow_file_access_from_file_urls(True)
+        settings.set_allow_universal_access_from_file_urls(True)
+        settings.set_enable_developer_extras(True)
+        settings.set_enable_javascript(True)
+
+        # Locate compiled Web UI
+        ui_path = os.path.expanduser('~/.local/share/ar-files/ui/index.html')
+        if not os.path.exists(ui_path):
+            workspace_ui = '/run/media/abhi/My Data Drive/Projects/TAURI-RUST/AR-Files/ui/dist/index.html'
+            if os.path.exists(workspace_ui):
+                ui_path = workspace_ui
+
+        webview.load_uri(f'file://{ui_path}')
+        win.set_content(webview)
+
+        win.present()
+
+    def handle_ipc_command(self, cmd, args):
+        if cmd == "finish_picker_operation":
+            handle = args.get("handle")
+            cancelled = args.get("cancelled", False)
+            uris = args.get("uris", [])
+            if handle and handle in self.pending_picker_invocations:
+                invocation, win = self.pending_picker_invocations.pop(handle)
+                if cancelled:
+                    invocation.return_value(GLib.Variant('(ua{sv})', (1, {})))
+                else:
+                    norm_uris = [u if u.startswith('file://') else f'file://{quote(u)}' for u in uris]
+                    invocation.return_value(GLib.Variant('(ua{sv})', (0, {'uris': GLib.Variant('as', norm_uris)})))
+                def _close_p():
+                    win.close()
+                    return False
+                GLib.idle_add(_close_p)
+                return {"success": True}
+            return {"success": False, "error": "No pending picker request found"}
+
+        elif cmd == "is_default_file_manager":
+            try:
+                proc = subprocess.run(["xdg-mime", "query", "default", "inode/directory"], capture_output=True, text=True, timeout=3)
+                out = (proc.stdout or "").strip()
+                is_def = "org.arfiles.ARFiles.desktop" in out or "ar-files.desktop" in out
+                return is_def
+            except Exception:
+                return False
+
+        elif cmd == "set_as_default_file_manager":
+            try:
+                subprocess.run(["xdg-mime", "default", "org.arfiles.ARFiles.desktop", "inode/directory"], check=True, timeout=5)
+                subprocess.run(["gio", "mime", "inode/directory", "org.arfiles.ARFiles.desktop"], check=True, timeout=5)
+                try:
+                    subprocess.Popen(['nautilus', '-q'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+                return True
+            except Exception as e:
+                return False
+
+        elif cmd == "list_system_devices":
+            return {"devices": self.get_system_devices()}
+
+        elif cmd == "mount_device":
+            node = args.get("device_node") or args.get("device_id")
+            return self.mount_device(device_node=node, device_id=args.get("id"))
+
+        elif cmd == "unmount_device":
+            return self.unmount_device(args.get("mount_path"), args.get("device_node"))
+
+        elif cmd == "eject_device":
+            return self.eject_device(args.get("mount_path"), args.get("device_node"))
+
+        elif cmd == "list_local_directory":
+            target = os.path.expanduser(args.get("path") or '~')
+            if not os.path.exists(target):
+                return {"items": [], "total_count": 0}
+            items = []
+            try:
+                with os.scandir(target) as it:
+                    for entry in it:
+                        try:
+                            stat_res = entry.stat(follow_symlinks=False)
+                            is_dir = entry.is_dir(follow_symlinks=False)
+                            mime = "inode/directory" if is_dir else (mimetypes.guess_type(entry.path)[0] or "application/octet-stream")
+                            thumb = None
+                            if not is_dir:
+                                thumb = self.resolve_thumbnail(entry.path, mime=mime, mtime=int(stat_res.st_mtime))
+                            items.append({
+                                "id": entry.path,
+                                "account_id": "acc_local",
+                                "parent_id": target,
+                                "name": entry.name,
+                                "path": entry.path,
+                                "is_directory": is_dir,
+                                "size": stat_res.st_size if not is_dir else 0,
+                                "mtime": int(stat_res.st_mtime * 1000),
+                                "mime_type": mime,
+                                "state": "available",
+                                "local_path": entry.path,
+                                "thumbnail_url": thumb,
+                                "sync_version": 1,
+                                "created_at": int(stat_res.st_ctime * 1000),
+                                "updated_at": int(stat_res.st_mtime * 1000),
+                            })
+                        except (OSError, PermissionError):
+                            continue
+            except Exception as e:
+                return {"items": [], "total_count": 0, "error": str(e)}
+            return {"items": items, "total_count": len(items)}
+
+        elif cmd == "open_file":
+            path = args.get("path")
+            entry_id = args.get("entry_id") or args.get("id")
+            target = path or entry_id
+            if not target:
+                return {"success": False, "error": "No path or entry_id provided"}
+
+            if str(target).startswith(("http://", "https://")):
+                try:
+                    subprocess.Popen(["xdg-open", str(target)])
+                    return {"success": True}
+                except Exception as e:
+                    return {"success": False, "error": str(e)}
+
+            # If it's a local file that exists, launch directly
+            if path and os.path.exists(path):
+                try:
+                    subprocess.Popen(["xdg-open", path])
+                    return {"success": True, "local_path": path}
+                except Exception as e:
+                    return {"success": False, "error": str(e)}
+
+            # Otherwise, it is a cloud entry that needs hydration
+            hydrate_target = entry_id or path
+            hydrate_resp = self.send_backend_ipc("hydrate_entry", {"entry_id": hydrate_target})
+            if hydrate_resp and hydrate_resp.get("success"):
+                cached_local_path = hydrate_resp.get("data")
+                if cached_local_path and os.path.exists(cached_local_path):
+                    try:
+                        subprocess.Popen(["xdg-open", cached_local_path])
+                        return {"success": True, "local_path": cached_local_path}
+                    except Exception as e:
+                        return {"success": False, "error": f"Failed launching file: {e}"}
+
+            return hydrate_resp or {"success": False, "error": "Failed to hydrate cloud file."}
+
+        elif cmd == "create_folder":
+            acc_id = args.get("account_id")
+            if acc_id and acc_id != "acc_local":
+                return self.send_backend_ipc(cmd, args)
+            parent = os.path.expanduser(args.get("parent_id") or args.get("parent_path") or '~')
+            name = args.get("name") or "New Folder"
+            full_path = os.path.join(parent, name)
+            try:
+                os.makedirs(full_path, exist_ok=False)
+                return {"success": True, "path": full_path}
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+
+        elif cmd == "rename_entry":
+            old_path = args.get("id") or args.get("path")
+            if old_path and os.path.exists(old_path):
+                new_name = args.get("new_name")
+                if old_path and new_name:
+                    new_path = os.path.join(os.path.dirname(old_path), new_name)
+                    try:
+                        os.rename(old_path, new_path)
+                        return {"success": True, "path": new_path}
+                    except Exception as e:
+                        return {"success": False, "error": str(e)}
+            return self.send_backend_ipc(cmd, args)
+
+        elif cmd == "trash_entries":
+            paths = args.get("entry_ids") or args.get("paths") or []
+            local_paths = [p for p in paths if os.path.exists(p)]
+            cloud_ids = [p for p in paths if not os.path.exists(p)]
+
+            trashed = []
+            errors = []
+            if local_paths:
+                for p in local_paths:
+                    try:
+                        gfile = Gio.File.new_for_path(p)
+                        gfile.trash(None)
+                        trashed.append(p)
+                    except Exception as e:
+                        try:
+                            sub = subprocess.run(["gio", "trash", p], capture_output=True, text=True, timeout=5)
+                            if sub.returncode == 0:
+                                trashed.append(p)
+                            else:
+                                errors.append(f"{p}: {sub.stderr.strip() or e}")
+                        except Exception as e2:
+                            errors.append(f"{p}: {e2}")
+
+            if cloud_ids:
+                res = self.send_backend_ipc(cmd, {"entry_ids": cloud_ids})
+                if res and isinstance(res, dict):
+                    if not res.get("success", False):
+                        if res.get("error"):
+                            errors.append(res["error"])
+                    else:
+                        trashed.extend(cloud_ids)
+                elif res is None:
+                    errors.append("Backend daemon communication failure")
+
+            return {"success": len(errors) == 0, "trashed": trashed, "errors": errors}
+
+        elif cmd == "get_user_home":
+            return {"home": os.path.expanduser('~')}
+
+        elif cmd == "open_in_terminal":
+            path = args.get("path") or args.get("cwd") or '~'
+            account_id = args.get("account_id")
+
+            # If path is not an existing local directory or file, and account_id is a cloud account
+            if account_id and account_id != "acc_local" and not os.path.exists(os.path.expanduser(path)):
+                try:
+                    mount_res = self.send_backend_ipc("get_account_mount_path", {"account_id": account_id})
+                    mount_path = mount_res.get("data") if isinstance(mount_res, dict) else mount_res
+                    if not mount_path:
+                        m_res = self.send_backend_ipc("mount_account_vfs", {"account_id": account_id})
+                        mount_path = m_res.get("data") if isinstance(m_res, dict) else m_res
+
+                    if mount_path and os.path.isdir(mount_path):
+                        rel = path.lstrip("/")
+                        cand = os.path.join(mount_path, rel)
+                        if os.path.isdir(cand):
+                            path = cand
+                        elif os.path.isfile(cand):
+                            path = os.path.dirname(cand)
+                        else:
+                            path = mount_path
+                except Exception as e:
+                    print(f"[open_in_terminal] Mount resolution exception: {e}", file=sys.stderr)
+
+            path = os.path.expanduser(path)
+            if os.path.isfile(path):
+                cwd = os.path.dirname(path)
+            elif os.path.isdir(path):
+                cwd = path
+            else:
+                parent = os.path.dirname(path)
+                if parent and os.path.isdir(parent):
+                    cwd = parent
+                else:
+                    cwd = os.path.expanduser('~')
+
+            term_cmds = [
+                ["/usr/bin/ptyxis", "--new-window", f"--working-directory={cwd}"],
+                ["ptyxis", "--new-window", f"--working-directory={cwd}"],
+                ["/usr/bin/ptyxis", "--tab", f"--working-directory={cwd}"],
+                ["ptyxis", "--tab", f"--working-directory={cwd}"],
+                ["gnome-terminal", f"--working-directory={cwd}"],
+                ["kgx", f"--working-directory={cwd}"],
+                ["alacritty", "--working-directory", cwd],
+                ["kitty", "--directory", cwd],
+                ["wezterm", "start", "--cwd", cwd],
+                ["xfce4-terminal", f"--working-directory={cwd}"],
+                ["mate-terminal", f"--working-directory={cwd}"],
+                ["konsole", "--workdir", cwd],
+                ["xterm", "-e", f"cd '{cwd}' && exec bash"],
+                ["x-terminal-emulator"]
+            ]
+            launched = False
+            for t_cmd in term_cmds:
+                try:
+                    p = t_cmd[0]
+                    if os.path.exists(p) or subprocess.run(["which", p], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+                        subprocess.Popen(t_cmd, cwd=cwd)
+                        launched = True
+                        break
+                except Exception:
+                    continue
+
+            if not launched:
+                try:
+                    subprocess.Popen(f"cd '{cwd}' && (ptyxis --new-window --working-directory='{cwd}' || gnome-terminal --working-directory='{cwd}' || xterm) &", shell=True, cwd=cwd)
+                    launched = True
+                except Exception as e:
+                    return {"success": False, "error": str(e)}
+
+            return {"success": True, "cwd": cwd}
+
+        elif cmd == "list_apps_for_file":
+            path = args.get("path")
+            mime = args.get("mime_type")
+            if not mime and path:
+                mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+
+            recommended = []
+            others = []
+            seen_ids = set()
+
+            try:
+                if mime:
+                    for app in Gio.AppInfo.get_all_for_type(mime):
+                        app_id = app.get_id()
+                        if app_id and app_id not in seen_ids:
+                            seen_ids.add(app_id)
+                            icon_str = None
+                            try:
+                                icon = app.get_icon()
+                                icon_str = icon.to_string() if icon else None
+                            except Exception:
+                                pass
+                            recommended.append({
+                                "id": app_id,
+                                "name": app.get_name(),
+                                "display_name": app.get_display_name() or app.get_name(),
+                                "description": app.get_description() or "",
+                                "executable": app.get_executable() or "",
+                                "icon": icon_str,
+                                "is_recommended": True,
+                            })
+            except Exception:
+                pass
+
+            try:
+                for app in Gio.AppInfo.get_all():
+                    app_id = app.get_id()
+                    if app_id and app_id not in seen_ids and app.should_show():
+                        seen_ids.add(app_id)
+                        icon_str = None
+                        try:
+                            icon = app.get_icon()
+                            icon_str = icon.to_string() if icon else None
+                        except Exception:
+                            pass
+                        others.append({
+                            "id": app_id,
+                            "name": app.get_name(),
+                            "display_name": app.get_display_name() or app.get_name(),
+                            "description": app.get_description() or "",
+                            "executable": app.get_executable() or "",
+                            "icon": icon_str,
+                            "is_recommended": False,
+                        })
+            except Exception:
+                pass
+
+            recommended.sort(key=lambda a: a["name"].lower())
+            others.sort(key=lambda a: a["name"].lower())
+
+            return {"recommended": recommended, "others": others, "mime_type": mime}
+
+        elif cmd == "open_file_with":
+            path = args.get("path")
+            app_id = args.get("app_id")
+            custom_command = args.get("custom_command")
+
+            if not path or not os.path.exists(path):
+                return {"success": False, "error": "File does not exist on disk"}
+
+            if custom_command:
+                try:
+                    subprocess.Popen(f"{custom_command} '{path}'", shell=True)
+                    return {"success": True}
+                except Exception as e:
+                    return {"success": False, "error": str(e)}
+
+            if app_id:
+                try:
+                    subprocess.Popen(["gtk-launch", app_id, path])
+                    return {"success": True}
+                except Exception:
+                    try:
+                        app = Gio.DesktopAppInfo.new(app_id)
+                        if app:
+                            app.launch([Gio.File.new_for_path(path)], None)
+                            return {"success": True}
+                    except Exception as e:
+                        return {"success": False, "error": str(e)}
+
+            return {"success": False, "error": "No app or command provided"}
+
+        elif cmd == "read_text_preview":
+            path = args.get("path")
+            max_bytes = args.get("max_bytes", 65536)
+            if not path or not os.path.exists(path):
+                return {"success": False, "error": "File not found"}
+
+            try:
+                size = os.path.getsize(path)
+                with open(path, "rb") as f:
+                    chunk = f.read(max_bytes)
+
+                try:
+                    text = chunk.decode("utf-8")
+                except UnicodeDecodeError:
+                    text = chunk.decode("latin-1", errors="replace")
+
+                lines = text.splitlines()
+                return {
+                    "success": True,
+                    "content": text,
+                    "line_count": len(lines),
+                    "size": size,
+                    "is_truncated": size > max_bytes
+                }
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+
+        elif cmd == "get_thumbnail":
+            path = args.get("path")
+            account_id = args.get("account_id")
+            entry_id = args.get("entry_id")
+            thumbnail_url = args.get("thumbnail_url")
+
+            # Route cloud files to backend get_cloud_thumbnail
+            if account_id and account_id != "acc_local":
+                res = self.send_backend_ipc("get_cloud_thumbnail", {
+                    "account_id": account_id,
+                    "entry_id": entry_id or path or "",
+                    "thumbnail_url": thumbnail_url
+                })
+                thumb = res.get("data") if (isinstance(res, dict) and res.get("success")) else None
+                return {"thumbnail": thumb}
+
+            if path:
+                if os.path.exists(path):
+                    thumb = self.resolve_thumbnail(path)
+                    return {"thumbnail": thumb}
+                elif account_id:
+                    res = self.send_backend_ipc("get_cloud_thumbnail", {
+                        "account_id": account_id,
+                        "entry_id": entry_id or path,
+                        "thumbnail_url": thumbnail_url
+                    })
+                    thumb = res.get("data") if (isinstance(res, dict) and res.get("success")) else None
+                    return {"thumbnail": thumb}
+
+            return {"thumbnail": None}
+
+        elif cmd == "analyze_folder_intelligence":
+            account_id = args.get("account_id")
+            if account_id:
+                parent_id = args.get("parent_id")
+                db_path = os.environ.get("AR_METADATA_DB") or os.path.expanduser("~/.local/share/ar-files/metadata.db")
+                if not os.path.exists(db_path):
+                    return {
+                        "empty_folders": [],
+                        "duplicate_files": [],
+                        "duplicate_folders": [],
+                        "summary": {
+                            "empty_folder_count": 0,
+                            "duplicate_group_count": 0,
+                            "duplicate_file_count": 0,
+                            "duplicate_folder_group_count": 0,
+                            "reclaimable_bytes": 0
+                        }
+                    }
+
+                try:
+                    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
+                    cursor = conn.cursor()
+
+                    # 1. Fetch current view entries
+                    if not parent_id or parent_id == "root":
+                        cursor.execute("""
+                            SELECT id, name, path, is_directory, size, mtime, content_hash
+                            FROM entries
+                            WHERE account_id = ?
+                              AND (parent_id IS NULL OR parent_id = 'root' OR parent_id = (SELECT root_folder_id FROM accounts WHERE id = ?) OR parent_id NOT IN (SELECT id FROM entries WHERE account_id = ?))
+                        """, (account_id, account_id, account_id))
+                    else:
+                        cursor.execute("""
+                            SELECT id, name, path, is_directory, size, mtime, content_hash
+                            FROM entries
+                            WHERE account_id = ? AND parent_id = ?
+                        """, (account_id, parent_id))
+                    current_entries = cursor.fetchall()
+
+                    dirs = [e for e in current_entries if e[3] == 1]
+                    files = [e for e in current_entries if e[3] == 0]
+
+                    # 2. Empty folders in current view
+                    dir_ids = [d[0] for d in dirs]
+                    empty_folders = []
+                    folder_signatures = defaultdict(list)
+                    if dir_ids:
+                        placeholders = ','.join('?' for _ in dir_ids)
+                        cursor.execute(f"""
+                            SELECT parent_id, count(*) FROM entries
+                            WHERE account_id = ? AND parent_id IN ({placeholders})
+                            GROUP BY parent_id
+                        """, [account_id] + dir_ids)
+                        non_empty_ids = set(r[0] for r in cursor.fetchall())
+                        for d in dirs:
+                            if d[0] not in non_empty_ids:
+                                empty_folders.append({
+                                    "id": d[0],
+                                    "name": d[1],
+                                    "path": d[2] or d[1],
+                                    "mtime": d[5] or 0
+                                })
+
+                        cursor.execute(f"""
+                            SELECT parent_id, name, is_directory, size FROM entries
+                            WHERE account_id = ? AND parent_id IN ({placeholders})
+                            ORDER BY parent_id, name
+                        """, [account_id] + dir_ids)
+                        child_rows = cursor.fetchall()
+                        child_map = defaultdict(list)
+                        for ch in child_rows:
+                            child_map[ch[0]].append((ch[1], ch[2], ch[3]))
+
+                        for d in dirs:
+                            did = d[0]
+                            if did in non_empty_ids and child_map[did]:
+                                sig = ';'.join(f"{n}:{is_d}:{s}" for n, is_d, s in child_map[did])
+                                shash = hashlib.md5(sig.encode('utf-8')).hexdigest()
+                                folder_signatures[shash].append({
+                                    "id": did,
+                                    "name": d[1],
+                                    "path": d[2] or d[1],
+                                    "mtime": d[5] or 0,
+                                    "item_count": len(child_map[did])
+                                })
+
+                    duplicate_folders = []
+                    for sig_hash, f_items in folder_signatures.items():
+                        if len(f_items) > 1:
+                            duplicate_folders.append({
+                                "signature": sig_hash,
+                                "items": sorted(f_items, key=lambda x: x["mtime"])
+                            })
+
+                    # 3. Duplicate files in current view & account
+                    duplicate_files = []
+                    total_reclaimable = 0
+                    total_dup_file_count = 0
+
+                    eligible_files = [f for f in files if f[4] > 0]
+                    if eligible_files:
+                        current_file_ids = set(f[0] for f in eligible_files)
+                        cursor.execute("""
+                            SELECT e.id, e.name, e.path, e.size, e.mtime, e.ctime, e.content_hash,
+                                   COALESCE((SELECT name FROM entries p WHERE p.id = e.parent_id), 'Root') as parent_name
+                            FROM entries e
+                            WHERE e.account_id = ? AND e.is_directory = 0 AND e.size > 0
+                        """, (account_id,))
+                        all_files = cursor.fetchall()
+
+                        parent_ds = list(range(len(all_files)))
+                        def find_ds(i):
+                            if parent_ds[i] != i:
+                                parent_ds[i] = find_ds(parent_ds[i])
+                            return parent_ds[i]
+                        def union_ds(i, j):
+                            ri = find_ds(i)
+                            rj = find_ds(j)
+                            if ri != rj:
+                                parent_ds[ri] = rj
+
+                        by_hash = defaultdict(list)
+                        by_norm_name = defaultdict(list)
+
+                        for idx, f in enumerate(all_files):
+                            h = f[6]
+                            if h and h.strip():
+                                by_hash[h.strip()].append(idx)
+                            norm = normalize_stem(f[1])
+                            by_norm_name[norm].append(idx)
+
+                        for h, idxs in by_hash.items():
+                            if len(idxs) > 1:
+                                for j in idxs[1:]:
+                                    union_ds(idxs[0], j)
+
+                        for norm, idxs in by_norm_name.items():
+                            if len(idxs) > 1:
+                                for i in range(len(idxs)):
+                                    for j in range(i + 1, len(idxs)):
+                                        sz1 = all_files[idxs[i]][3]
+                                        sz2 = all_files[idxs[j]][3]
+                                        max_sz = max(sz1, sz2)
+                                        min_sz = min(sz1, sz2)
+                                        diff = max_sz - min_sz
+                                        if sz1 == sz2 or (diff / max_sz) <= 0.05 or diff <= 15360:
+                                            union_ds(idxs[i], idxs[j])
+
+                        clusters = defaultdict(list)
+                        for idx in range(len(all_files)):
+                            root_idx = find_ds(idx)
+                            clusters[root_idx].append(all_files[idx])
+
+                        for root_idx, c_items in clusters.items():
+                            if len(c_items) > 1:
+                                if any(it[0] in current_file_ids for it in c_items):
+                                    sorted_items = sorted(c_items, key=lambda x: (x[5] or x[4] or 0, x[4] or 0))
+                                    max_sz = max(it[3] for it in c_items)
+                                    reclaimable = sum(it[3] for it in c_items) - max_sz
+                                    total_reclaimable += reclaimable
+                                    total_dup_file_count += len(c_items)
+
+                                    group_items = []
+                                    for it in sorted_items:
+                                        loc = it[2] if (it[2] and it[2] != f"/{it[1]}") else (f"/{it[7]}/{it[1]}" if it[7] != 'Root' else f"/{it[1]}")
+                                        group_items.append({
+                                            "id": it[0],
+                                            "name": it[1],
+                                            "path": loc,
+                                            "size": it[3],
+                                            "mtime": it[4] or 0,
+                                            "ctime": it[5] or it[4] or 0,
+                                            "thumbnail_url": None
+                                        })
+                                    duplicate_files.append({
+                                        "hash": f"group_{root_idx}",
+                                        "size": max_sz,
+                                        "reclaimable_bytes": reclaimable,
+                                        "items": group_items
+                                    })
+
+                    conn.close()
+
+                    return {
+                        "empty_folders": sorted(empty_folders, key=lambda x: x["name"].lower()),
+                        "duplicate_files": sorted(duplicate_files, key=lambda x: x["reclaimable_bytes"], reverse=True),
+                        "duplicate_folders": duplicate_folders,
+                        "summary": {
+                            "empty_folder_count": len(empty_folders),
+                            "duplicate_group_count": len(duplicate_files),
+                            "duplicate_file_count": total_dup_file_count,
+                            "duplicate_folder_group_count": len(duplicate_folders),
+                            "reclaimable_bytes": total_reclaimable
+                        }
+                    }
+                except Exception as e:
+                    return {"error": str(e)}
+
+            target = os.path.expanduser(args.get("path") or args.get("folder_path") or '~')
+            if not os.path.isdir(target):
+                return {
+                    "empty_folders": [],
+                    "duplicate_files": [],
+                    "duplicate_folders": [],
+                    "summary": {
+                        "empty_folder_count": 0,
+                        "duplicate_group_count": 0,
+                        "duplicate_file_count": 0,
+                        "duplicate_folder_group_count": 0,
+                        "reclaimable_bytes": 0
+                    }
+                }
+
+            empty_folders = []
+            folder_signatures = defaultdict(list)
+            local_files = []
+
+            try:
+                with os.scandir(target) as it:
+                    for entry in it:
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                stat_res = entry.stat(follow_symlinks=False)
+                                children = []
+                                try:
+                                    with os.scandir(entry.path) as sub_it:
+                                        for child in sub_it:
+                                            is_c_dir = child.is_dir(follow_symlinks=False)
+                                            sz = child.stat(follow_symlinks=False).st_size if not is_c_dir else 0
+                                            children.append((child.name, 'd' if is_c_dir else f'f:{sz}'))
+                                except (PermissionError, OSError):
+                                    continue
+
+                                if not children:
+                                    empty_folders.append({
+                                        "id": entry.path,
+                                        "name": entry.name,
+                                        "path": entry.path,
+                                        "mtime": int(stat_res.st_mtime * 1000),
+                                    })
+                                else:
+                                    children.sort()
+                                    sig = ';'.join(f'{n}:{t}' for n, t in children)
+                                    sig_hash = hashlib.md5(sig.encode('utf-8')).hexdigest()
+                                    folder_signatures[sig_hash].append({
+                                        "id": entry.path,
+                                        "name": entry.name,
+                                        "path": entry.path,
+                                        "mtime": int(stat_res.st_mtime * 1000),
+                                        "item_count": len(children)
+                                    })
+
+                            elif entry.is_file(follow_symlinks=False):
+                                stat_res = entry.stat(follow_symlinks=False)
+                                if stat_res.st_size > 0:
+                                    ext = os.path.splitext(entry.name)[1].lower()
+                                    thumb = f"file://{entry.path}" if ext in ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg') else None
+                                    ctime_ms = int(getattr(stat_res, 'st_birthtime', stat_res.st_ctime) * 1000)
+                                    mtime_ms = int(stat_res.st_mtime * 1000)
+                                    local_files.append({
+                                        "id": entry.path,
+                                        "name": entry.name,
+                                        "path": entry.path,
+                                        "size": stat_res.st_size,
+                                        "mtime": mtime_ms,
+                                        "ctime": ctime_ms,
+                                        "thumbnail_url": thumb,
+                                    })
+                        except (OSError, PermissionError):
+                            continue
+            except Exception as e:
+                return {"error": str(e)}
+
+            # Duplicate files calculation for local files
+            duplicate_files = []
+            total_reclaimable = 0
+            total_dup_file_count = 0
+
+            if local_files:
+                parent_ds = list(range(len(local_files)))
+                def find_ds_local(i):
+                    if parent_ds[i] != i:
+                        parent_ds[i] = find_ds_local(parent_ds[i])
+                    return parent_ds[i]
+                def union_ds_local(i, j):
+                    ri = find_ds_local(i)
+                    rj = find_ds_local(j)
+                    if ri != rj:
+                        parent_ds[ri] = rj
+
+                # Quick content hash for same size files
+                size_map = defaultdict(list)
+                for idx, lf in enumerate(local_files):
+                    size_map[lf["size"]].append(idx)
+
+                for sz, idxs in size_map.items():
+                    if len(idxs) > 1:
+                        hash_groups = defaultdict(list)
+                        for idx in idxs:
+                            try:
+                                with open(local_files[idx]["path"], "rb") as f:
+                                    if sz <= 16384:
+                                        h = hashlib.md5(f.read()).hexdigest()
+                                    else:
+                                        h = hashlib.md5(f.read(16384)).hexdigest()
+                                hash_groups[h].append(idx)
+                            except Exception:
+                                continue
+                        for h, h_idxs in hash_groups.items():
+                            if len(h_idxs) > 1:
+                                for j in h_idxs[1:]:
+                                    union_ds_local(h_idxs[0], j)
+
+                # Connect normalized stem names with same or close size (e.g. 7kb vs 7.1kb)
+                by_norm = defaultdict(list)
+                for idx, lf in enumerate(local_files):
+                    norm = normalize_stem(lf["name"])
+                    by_norm[norm].append(idx)
+
+                for norm, idxs in by_norm.items():
+                    if len(idxs) > 1:
+                        for i in range(len(idxs)):
+                            for j in range(i + 1, len(idxs)):
+                                sz1 = local_files[idxs[i]]["size"]
+                                sz2 = local_files[idxs[j]]["size"]
+                                max_sz = max(sz1, sz2)
+                                min_sz = min(sz1, sz2)
+                                diff = max_sz - min_sz
+                                if sz1 == sz2 or (diff / max_sz) <= 0.05 or diff <= 15360:
+                                    union_ds_local(idxs[i], idxs[j])
+
+                clusters = defaultdict(list)
+                for idx in range(len(local_files)):
+                    root_idx = find_ds_local(idx)
+                    clusters[root_idx].append(local_files[idx])
+
+                for root_idx, c_items in clusters.items():
+                    if len(c_items) > 1:
+                        sorted_items = sorted(c_items, key=lambda x: (x["ctime"], x["mtime"]))
+                        max_sz = max(it["size"] for it in c_items)
+                        reclaimable = sum(it["size"] for it in c_items) - max_sz
+                        total_reclaimable += reclaimable
+                        total_dup_file_count += len(c_items)
+                        duplicate_files.append({
+                            "hash": f"local_group_{root_idx}",
+                            "size": max_sz,
+                            "reclaimable_bytes": reclaimable,
+                            "items": sorted_items
+                        })
+
+            # Duplicate folders calculation
+            duplicate_folders = []
+            for sig_hash, f_items in folder_signatures.items():
+                if len(f_items) > 1:
+                    duplicate_folders.append({
+                        "signature": sig_hash,
+                        "items": sorted(f_items, key=lambda x: x["mtime"])
+                    })
+
+            return {
+                "empty_folders": sorted(empty_folders, key=lambda x: x["name"].lower()),
+                "duplicate_files": sorted(duplicate_files, key=lambda x: x["reclaimable_bytes"], reverse=True),
+                "duplicate_folders": duplicate_folders,
+                "summary": {
+                    "empty_folder_count": len(empty_folders),
+                    "duplicate_group_count": len(duplicate_files),
+                    "duplicate_file_count": total_dup_file_count,
+                    "duplicate_folder_group_count": len(duplicate_folders),
+                    "reclaimable_bytes": total_reclaimable,
+                }
+            }
+
+        # All cloud operations are dispatched directly to the Rust backend daemon
+        backend_cmds = {
+            "list_accounts",
+            "list_entries",
+            "start_google_oauth",
+            "add_onedrive_account",
+            "add_generic_account",
+            "remove_account",
+            "update_account_credentials",
+            "hydrate_entry",
+            "trigger_sync",
+            "get_sync_status",
+            "get_account_quota",
+            "pin_entry",
+            "unpin_entry",
+            "free_up_space",
+            "delete_permanently",
+            "search_fts",
+            "mount_account_vfs",
+            "unmount_account_vfs",
+            "is_account_mounted",
+            "get_account_mount_path",
+            "list_active_mounts",
+            "get_cloud_thumbnail",
+        }
+
+        if cmd in backend_cmds:
+            return self.send_backend_ipc(cmd, args)
+
+        return {"unhandled": True}
+
+    def do_shutdown(self):
+        if self.backend_proc and self.backend_proc.poll() is None:
+            self.backend_proc.terminate()
+            try:
+                self.backend_proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.backend_proc.kill()
+        Adw.Application.do_shutdown(self)
+
+def main():
+    app = ARFilesApplication()
+    return app.run(sys.argv)
+
+if __name__ == '__main__':
+    sys.exit(main())

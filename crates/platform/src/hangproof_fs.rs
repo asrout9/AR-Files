@@ -70,9 +70,9 @@ impl LocalFileMetadata {
         &self,
         account_id: &str,
         parent_id: Option<String>,
-        entry_id_prefix: &str,
+        _entry_id_prefix: &str,
     ) -> EntryRecord {
-        let entry_id = format!("{}_{}", entry_id_prefix, self.ino);
+        let entry_id = self.path.to_string_lossy().to_string();
         let state = if self.allocated_bytes == 0 && self.size > 0 {
             FileState::CloudOnly // Sparse placeholder
         } else {
@@ -100,6 +100,21 @@ impl LocalFileMetadata {
             last_accessed_at: Some(self.mtime),
             created_at: self.ctime,
             updated_at: self.mtime,
+            thumbnail_url: if self.is_directory {
+                None
+            } else {
+                crate::thumbnail::ThumbnailManager::new()
+                    .get_cached_thumbnail(&self.path, crate::thumbnail::ThumbnailSize::Normal)
+                    .map(|p| format!("file://{}", p.to_string_lossy()))
+                    .or_else(|| {
+                        let ext = self.path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                        if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif" | "svg" | "bmp" | "ico" | "avif") {
+                            Some(format!("file://{}", self.path.to_string_lossy()))
+                        } else {
+                            None
+                        }
+                    })
+            },
         }
     }
 

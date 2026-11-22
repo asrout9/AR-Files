@@ -5,6 +5,8 @@ import { QuickPreviewModal } from "../src/components/QuickPreviewModal";
 import { PreferencesDialog } from "../src/components/PreferencesDialog";
 import { DiagnosticsDialog } from "../src/components/DiagnosticsDialog";
 import { VersionHistoryDialog } from "../src/components/VersionHistoryDialog";
+import { AddCloudDialog } from "../src/components/AddCloudDialog";
+import { Sidebar } from "../src/components/Sidebar";
 import { useExplorerStore } from "../src/store/useExplorerStore";
 import { EntryRecord } from "../src/types";
 
@@ -142,5 +144,43 @@ describe("Phase 4: Cloud Management Depth, Details, Preview, Preferences & Diagn
     fireEvent.click(restoreBtn);
 
     expect(screen.getByText("Restored")).toBeDefined();
+  });
+
+  it("AddCloudDialog displays cloud provider options and adds account", async () => {
+    useExplorerStore.setState({ isAddCloudOpen: true, accounts: [] });
+    render(<AddCloudDialog />);
+
+    expect(screen.getByText("Add Cloud Storage")).toBeDefined();
+    expect(screen.getByText("Google Drive")).toBeDefined();
+    expect(screen.getByText("Microsoft OneDrive")).toBeDefined();
+    expect(screen.getByText("Nextcloud")).toBeDefined();
+    expect(screen.getByText("Generic WebDAV")).toBeDefined();
+    expect(screen.getByText("Amazon S3 / S3-Compatible")).toBeDefined();
+    expect(screen.getByText("SFTP (SSH)")).toBeDefined();
+
+    // Click Google Drive
+    fireEvent.click(screen.getByText("Google Drive"));
+    expect(screen.getAllByText("Connect Google Drive").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/OAuth Access Token/)).toBeDefined();
+
+    // Click Back to return to provider list
+    fireEvent.click(screen.getByTitle("Back to providers"));
+    expect(screen.getByText("Add Cloud Storage")).toBeDefined();
+
+    // Select Nextcloud
+    fireEvent.click(screen.getByText("Nextcloud"));
+    expect(screen.getAllByText("Connect Nextcloud").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("SERVER ENDPOINT URL *")).toBeDefined();
+  });
+
+  it("Sidebar plus button opens AddCloudDialog", () => {
+    useExplorerStore.setState({ isAddCloudOpen: false });
+    render(<Sidebar />);
+
+    const addBtn = screen.getByTitle("Add Cloud Storage Account");
+    expect(addBtn).toBeDefined();
+    fireEvent.click(addBtn);
+
+    expect(useExplorerStore.getState().isAddCloudOpen).toBe(true);
   });
 });

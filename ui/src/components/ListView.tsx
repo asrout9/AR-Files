@@ -1,22 +1,14 @@
-import React, { useRef } from "react";
+import React, { useRef, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import {
-  Folder,
-  FileText,
-  FileCode,
-  Image as ImageIcon,
-  Film,
-  Music,
-  Archive,
-  ArrowUpDown,
-} from "lucide-react";
+import { ArrowUpDown, FolderOpen, Search, Copy } from "lucide-react";
 import { useExplorerStore } from "../store/useExplorerStore";
 import { EntryRecord } from "../types";
 import { StateIcon } from "./StateIcon";
+import { FileIcon } from "./FileIcon";
 import { formatLocalizedDate, formatLocalizedFileSize } from "../i18n";
 
 interface ListViewProps {
-  onContextMenu: (e: React.MouseEvent, entry: EntryRecord) => void;
+  onContextMenu: (e: React.MouseEvent, entry: EntryRecord | null) => void;
 }
 
 export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
@@ -25,14 +17,49 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
     selectedIds,
     toggleSelect,
     clearSelection,
-    navigateTo,
-    currentAccountId,
-    hydrateItem,
+    openItem,
     sortBy,
     setSort,
     language,
     trashSelected,
+    searchQuery,
+    isLoading,
+    folderIntelligence,
   } = useExplorerStore();
+
+  const emptyFolderSet = useMemo(() => {
+    const s = new Set<string>();
+    if (!folderIntelligence?.empty_folders) return s;
+    for (const f of folderIntelligence.empty_folders) {
+      if (f.id) s.add(f.id);
+      if (f.path) s.add(f.path);
+    }
+    return s;
+  }, [folderIntelligence]);
+
+  const duplicateFileSet = useMemo(() => {
+    const s = new Set<string>();
+    if (!folderIntelligence?.duplicate_files) return s;
+    for (const g of folderIntelligence.duplicate_files) {
+      for (const item of g.items) {
+        if (item.id) s.add(item.id);
+        if (item.path) s.add(item.path);
+      }
+    }
+    return s;
+  }, [folderIntelligence]);
+
+  const duplicateFolderSet = useMemo(() => {
+    const s = new Set<string>();
+    if (!folderIntelligence?.duplicate_folders) return s;
+    for (const g of folderIntelligence.duplicate_folders) {
+      for (const item of g.items) {
+        if (item.id) s.add(item.id);
+        if (item.path) s.add(item.path);
+      }
+    }
+    return s;
+  }, [folderIntelligence]);
 
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -55,7 +82,7 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
 
   const handleKeyDown = (e: React.KeyboardEvent, index: number, entry: EntryRecord) => {
     if (e.key === "Enter") {
-      handleDoubleClick(entry);
+      openItem(entry);
     } else if (e.key === " ") {
       e.preventDefault();
       toggleSelect(entry.id, true);
@@ -74,36 +101,70 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
     }
   };
 
-  const getFileIcon = (entry: EntryRecord) => {
-    if (entry.is_directory) {
-      return <Folder size={18} color="#3584e4" fill="#3584e4" fillOpacity={0.2} />;
-    }
-    const mime = entry.mime_type;
-    if (mime.startsWith("image/")) return <ImageIcon size={18} color="#e5a50a" />;
-    if (mime.startsWith("video/")) return <Film size={18} color="#9141ac" />;
-    if (mime.startsWith("audio/")) return <Music size={18} color="#3a944a" />;
-    if (mime.includes("tar") || mime.includes("zip") || mime.includes("gzip")) {
-      return <Archive size={18} color="#e66100" />;
-    }
-    if (mime.includes("javascript") || mime.includes("rust") || mime.includes("python")) {
-      return <FileCode size={18} color="#2190a4" />;
-    }
-    return <FileText size={18} color="var(--dim-fg)" />;
+  const handleDoubleClick = (entry: EntryRecord) => {
+    openItem(entry);
   };
 
-  const handleDoubleClick = (entry: EntryRecord) => {
-    if (entry.is_directory) {
-      navigateTo(currentAccountId, entry.id, entry.name);
-    } else {
-      // If cloud_only, trigger background hydration
-      if (entry.state === "cloud_only") {
-        hydrateItem(entry.id);
-      }
-    }
-  };
+  if (entries.length === 0 && !isLoading) {
+    return (
+      <div
+        className="adw-empty-state"
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onContextMenu(e, null);
+        }}
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          height: "100%",
+          width: "100%",
+          gap: 12,
+          padding: 32,
+          userSelect: "none",
+        }}
+      >
+        <div
+          style={{
+            width: 76,
+            height: 76,
+            borderRadius: "50%",
+            background: "var(--hover-bg)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "var(--dim-fg)",
+            marginBottom: 4,
+          }}
+        >
+          {searchQuery.trim() ? (
+            <Search size={38} strokeWidth={1.5} />
+          ) : (
+            <FolderOpen size={38} strokeWidth={1.5} color="var(--active-accent)" />
+          )}
+        </div>
+        <div style={{ fontSize: 16, fontWeight: 600, color: "var(--window-fg)" }}>
+          {searchQuery.trim() ? "No Results Found" : "Folder is Empty"}
+        </div>
+        <div style={{ fontSize: 13, color: "var(--dim-fg)", textAlign: "center", maxWidth: 320 }}>
+          {searchQuery.trim()
+            ? `No files matching "${searchQuery}" in this location.`
+            : "Drop files here or click New Folder to add files."}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%" }}>
+    <div
+      style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%" }}
+      onContextMenu={(e) => {
+        if ((e.target as HTMLElement).closest(".adw-table-row")) return;
+        e.preventDefault();
+        onContextMenu(e, null);
+      }}
+    >
       {/* Table Header with Sorting */}
       <div className="adw-table-header" role="row">
         <div
@@ -161,6 +222,14 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
             const entry = entries[virtualRow.index];
             const isSelected = selectedIds.has(entry.id);
+            const isLocal =
+              entry.account_id === "acc_local" ||
+              (!entry.remote_id &&
+                (entry.path?.startsWith("/") || entry.id?.startsWith("/")));
+
+            const isEmpty = entry.is_directory && (emptyFolderSet.has(entry.id) || (entry.path ? emptyFolderSet.has(entry.path) : false));
+            const isDup = !entry.is_directory && (duplicateFileSet.has(entry.id) || (entry.path ? duplicateFileSet.has(entry.path) : false));
+            const isDupFolder = entry.is_directory && (duplicateFolderSet.has(entry.id) || (entry.path ? duplicateFolderSet.has(entry.path) : false));
 
             return (
               <div
@@ -170,6 +239,18 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
                 aria-selected={isSelected}
                 aria-label={`${entry.name}, ${entry.is_directory ? "directory" : formatSize(entry.size, false)}`}
                 className={`adw-table-row ${isSelected ? "selected" : ""}`}
+                draggable={entry.is_directory}
+                onDragStart={(e) => {
+                  if (!entry.is_directory) return;
+                  const data = {
+                    type: "ar-folder-place",
+                    path: entry.path || entry.id,
+                    name: entry.name,
+                  };
+                  e.dataTransfer.setData("application/json", JSON.stringify(data));
+                  e.dataTransfer.setData("text/plain", entry.path || entry.id);
+                  e.dataTransfer.effectAllowed = "copyMove";
+                }}
                 style={{
                   position: "absolute",
                   top: 0,
@@ -191,8 +272,8 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
                 {/* Name & Icon Column */}
                 <div role="gridcell" style={{ flex: 4, display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
                   <div style={{ position: "relative", display: "inline-flex" }}>
-                    {getFileIcon(entry)}
-                    <StateIcon state={entry.state} size={11} />
+                    <FileIcon entry={entry} size={20} />
+                    <StateIcon state={entry.state} size={11} isLocal={isLocal} />
                   </div>
                   <span
                     style={{
@@ -204,6 +285,21 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
                   >
                     {entry.name}
                   </span>
+                  {isEmpty && (
+                    <span className="adw-intelligence-tag adw-tag-empty" title="Empty folder">
+                      Empty
+                    </span>
+                  )}
+                  {isDup && (
+                    <span className="adw-intelligence-tag adw-tag-duplicate" title="Duplicate file">
+                      <Copy size={9} /> Duplicate
+                    </span>
+                  )}
+                  {isDupFolder && (
+                    <span className="adw-intelligence-tag adw-tag-duplicate" title="Duplicate folder (identical contents)">
+                      <Copy size={9} /> Duplicate
+                    </span>
+                  )}
                 </div>
 
                 {/* Size Column */}
@@ -226,7 +322,7 @@ export const ListView: React.FC<ListViewProps> = ({ onContextMenu }) => {
 
                 {/* Status Column */}
                 <div role="gridcell" style={{ width: 60, display: "flex", justifyContent: "center" }}>
-                  <StateIcon state={entry.state} size={15} />
+                  <StateIcon state={entry.state} size={15} standalone={true} isLocal={isLocal} />
                 </div>
               </div>
             );

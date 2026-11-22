@@ -8,6 +8,98 @@ export type FileState =
   | 'error'
   | 'excluded';
 
+export interface SystemDevice {
+  id: string;
+  name: string;
+  mount_path: string;
+  device_type: "root" | "removable" | "drive" | "optical" | "network";
+  is_removable: boolean;
+  is_mounted: boolean;
+  can_unmount: boolean;
+  can_eject: boolean;
+  total_bytes?: number;
+  used_bytes?: number;
+  free_bytes?: number;
+  device_node?: string | null;
+  fs_type?: string | null;
+}
+
+export interface DesktopApp {
+  id: string;
+  name: string;
+  display_name: string;
+  description: string;
+  executable: string;
+  icon?: string | null;
+  is_recommended: boolean;
+}
+
+export interface ActiveJob {
+  id: string;
+  type: string;
+  title: string;
+  itemsCompleted: number;
+  totalItems: number;
+  bytesProcessed: number;
+  totalBytes: number;
+  speedBps: number;
+  etaSeconds: number | null;
+  status: "running" | "completed" | "failed" | "cancelled";
+}
+
+export interface EmptyFolderItem {
+  id: string;
+  name: string;
+  path: string;
+  mtime: number;
+}
+
+export interface DuplicateFileItem {
+  id: string;
+  name: string;
+  path: string;
+  size: number;
+  mtime: number;
+  ctime?: number | null;
+  local_path?: string | null;
+  thumbnail_url?: string | null;
+}
+
+export interface DuplicateGroup {
+  hash: string;
+  size: number;
+  reclaimable_bytes: number;
+  items: DuplicateFileItem[];
+}
+
+export interface DuplicateFolderItem {
+  id: string;
+  name: string;
+  path: string;
+  mtime: number;
+  item_count: number;
+}
+
+export interface DuplicateFolderGroup {
+  signature: string;
+  items: DuplicateFolderItem[];
+}
+
+export interface FolderIntelligenceSummary {
+  empty_folder_count: number;
+  duplicate_group_count: number;
+  duplicate_file_count: number;
+  duplicate_folder_group_count: number;
+  reclaimable_bytes: number;
+}
+
+export interface FolderIntelligenceResult {
+  empty_folders: EmptyFolderItem[];
+  duplicate_files: DuplicateGroup[];
+  duplicate_folders: DuplicateFolderGroup[];
+  summary: FolderIntelligenceSummary;
+}
+
 export interface EntryRecord {
   id: string;
   account_id: string;
@@ -29,6 +121,7 @@ export interface EntryRecord {
   last_accessed_at?: number | null;
   created_at: number;
   updated_at: number;
+  thumbnail_url?: string | null;
 }
 
 export type AccountSyncStatus =
@@ -53,6 +146,7 @@ export interface AccountRecord {
   mount_path?: string | null;
   created_at: number;
   updated_at: number;
+  thumbnail_url?: string | null;
 }
 
 export type SortField = 'name' | 'size' | 'modified' | 'created' | 'type' | 'state';

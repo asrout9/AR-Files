@@ -37,6 +37,8 @@ pub struct GDriveFile {
     pub parents: Option<Vec<String>>,
     #[serde(rename = "webViewLink")]
     pub web_view_link: Option<String>,
+    #[serde(rename = "thumbnailLink")]
+    pub thumbnail_link: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,7 +81,16 @@ struct GDriveStorageQuota {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GDriveUser {
+    #[serde(rename = "displayName")]
+    pub display_name: Option<String>,
+    #[serde(rename = "emailAddress")]
+    pub email_address: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct GDriveAboutResponse {
+    pub user: Option<GDriveUser>,
     #[serde(rename = "storageQuota")]
     pub storage_quota: Option<GDriveStorageQuota>,
 }
@@ -110,6 +121,89 @@ impl GoogleDriveProvider {
             credentials_mgr,
             is_offline: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn with_oauth_flow(
+        account_id: &str,
+        account_name: &str,
+        oauth_flow: Arc<GoogleOAuthFlow>,
+        credentials_mgr: CredentialsManager,
+    ) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(45))
+            .build()
+            .unwrap_or_default();
+
+        Self {
+            account_id: account_id.to_string(),
+            account_name: account_name.to_string(),
+            client,
+            oauth_flow,
+            credentials_mgr,
+            is_offline: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub async fn fetch_about(&self) -> Result<(Option<String>, ProviderQuota)> {
+        let url = format!("{}/about?fields=user,storageQuota", GDRIVE_API_BASE);
+
+        let resp = self
+            .execute_with_retry(|auth_token| {
+                let req_url = url.clone();
+                let client = self.client.clone();
+                async move { client.get(&req_url).bearer_auth(auth_token).send().await }
+            })
+            .await?;
+
+        let body: GDriveAboutResponse = resp
+            .json()
+            .await
+            .map_err(|e| CirrusError::Serialization(e.to_string()))?;
+
+        let sq = body.storage_quota.unwrap_or(GDriveStorageQuota {
+            limit: None,
+            usage: None,
+            usage_in_drive_trash: None,
+        });
+
+        let total_bytes = sq
+            .limit
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(15 * 1024 * 1024 * 1024);
+        let used_bytes = sq.usage.and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+        let trash_bytes = sq.usage_in_drive_trash.and_then(|s| s.parse::<u64>().ok());
+
+        let email = body.user.and_then(|u| u.email_address);
+
+        Ok((email, ProviderQuota {
+            total_bytes,
+            used_bytes,
+            trash_bytes,
+        }))
+    }
+
+    pub async fn fetch_root_id(&self) -> Result<String> {
+        let url = format!("{}/files/root?fields=id", GDRIVE_API_BASE);
+
+        let resp = self
+            .execute_with_retry(|auth_token| {
+                let req_url = url.clone();
+                let client = self.client.clone();
+                async move { client.get(&req_url).bearer_auth(auth_token).send().await }
+            })
+            .await?;
+
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| CirrusError::Serialization(e.to_string()))?;
+
+        let root_id = body["id"]
+            .as_str()
+            .unwrap_or("root")
+            .to_string();
+
+        Ok(root_id)
     }
 
     pub fn set_offline(&self, offline: bool) {
@@ -180,6 +274,7 @@ impl GoogleDriveProvider {
             content_hash: file.md5_checksum.clone(),
             state: FileState::CloudOnly,
             local_path: None,
+            thumbnail_url: file.thumbnail_link.clone(),
             error_message: None,
             sync_version: 1,
             last_accessed_at: None,
@@ -236,6 +331,12 @@ impl GoogleDriveProvider {
 
                     if !status.is_success() {
                         let err_text = resp.text().await.unwrap_or_default();
+                        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+                            return Err(CirrusError::AuthRequired {
+                                account_id: self.account_id.clone(),
+                                reason: "Google Drive OAuth access token has expired (1-hour token lifetime). Please re-authenticate or update credentials with a refresh token.".to_string(),
+                            });
+                        }
                         return Err(CirrusError::Network(format!(
                             "Google Drive API error (HTTP {}): {}",
                             status, err_text
@@ -290,7 +391,7 @@ impl CloudProvider for GoogleDriveProvider {
         let query = format!("'{}' in parents and trashed = false", parent);
 
         let mut url = format!(
-            "{}/files?q={}&pageSize=100&fields=nextPageToken,files(id,name,mimeType,size,modifiedTime,md5Checksum,trashed,parents,webViewLink)",
+            "{}/files?q={}&pageSize=100&fields=nextPageToken,files(id,name,mimeType,size,modifiedTime,md5Checksum,trashed,parents,webViewLink,thumbnailLink)",
             GDRIVE_API_BASE,
             urlencoding::encode(&query)
         );
@@ -324,7 +425,7 @@ impl CloudProvider for GoogleDriveProvider {
 
     async fn get_metadata(&self, id: &str) -> Result<EntryRecord> {
         let url = format!(
-            "{}/files/{}?fields=id,name,mimeType,size,modifiedTime,md5Checksum,trashed,parents,webViewLink",
+            "{}/files/{}?fields=id,name,mimeType,size,modifiedTime,md5Checksum,trashed,parents,webViewLink,thumbnailLink",
             GDRIVE_API_BASE, id
         );
 
@@ -370,7 +471,7 @@ impl CloudProvider for GoogleDriveProvider {
         };
 
         let url = format!(
-            "{}/changes?pageToken={}&pageSize=100&fields=nextPageToken,newStartPageToken,changes(fileId,removed,time,file(id,name,mimeType,size,modifiedTime,md5Checksum,trashed,parents))",
+            "{}/changes?pageToken={}&pageSize=100&fields=nextPageToken,newStartPageToken,changes(fileId,removed,time,file(id,name,mimeType,size,modifiedTime,md5Checksum,trashed,parents,thumbnailLink))",
             GDRIVE_API_BASE,
             urlencoding::encode(&token)
         );
@@ -711,39 +812,7 @@ impl CloudProvider for GoogleDriveProvider {
     }
 
     async fn quota(&self) -> Result<ProviderQuota> {
-        let url = format!("{}/about?fields=storageQuota", GDRIVE_API_BASE);
-
-        let resp = self
-            .execute_with_retry(|auth_token| {
-                let req_url = url.clone();
-                let client = self.client.clone();
-                async move { client.get(&req_url).bearer_auth(auth_token).send().await }
-            })
-            .await?;
-
-        let body: GDriveAboutResponse = resp
-            .json()
-            .await
-            .map_err(|e| CirrusError::Serialization(e.to_string()))?;
-
-        let sq = body.storage_quota.unwrap_or(GDriveStorageQuota {
-            limit: None,
-            usage: None,
-            usage_in_drive_trash: None,
-        });
-
-        let total_bytes = sq
-            .limit
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(15 * 1024 * 1024 * 1024);
-        let used_bytes = sq.usage.and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-        let trash_bytes = sq.usage_in_drive_trash.and_then(|s| s.parse::<u64>().ok());
-
-        Ok(ProviderQuota {
-            total_bytes,
-            used_bytes,
-            trash_bytes,
-        })
+        self.fetch_about().await.map(|(_, q)| q)
     }
 
     async fn share_link(&self, id: &str) -> Result<String> {
@@ -811,5 +880,25 @@ impl CloudProvider for GoogleDriveProvider {
             }
             Err(_) => Ok(Vec::new()),
         }
+    }
+
+    async fn fetch_thumbnail_bytes(&self, url: &str) -> Result<Bytes> {
+        let resp = self
+            .execute_with_retry(|auth_token| {
+                let req_url = url.to_string();
+                let client = self.client.clone();
+                async move {
+                    client
+                        .get(&req_url)
+                        .bearer_auth(auth_token)
+                        .send()
+                        .await
+                }
+            })
+            .await?;
+
+        resp.bytes()
+            .await
+            .map_err(|e| CirrusError::Network(format!("Failed to read thumbnail bytes: {}", e)))
     }
 }

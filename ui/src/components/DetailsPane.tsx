@@ -1,9 +1,7 @@
 import React, { useState } from "react";
 import {
   X,
-  FileText,
   Folder,
-  Image as ImageIcon,
   HardDrive,
   Pin,
   Share2,
@@ -14,6 +12,7 @@ import {
 } from "lucide-react";
 import { useExplorerStore } from "../store/useExplorerStore";
 import { StateIcon } from "./StateIcon";
+import { FileIcon } from "./FileIcon";
 import { EntryRecord } from "../types";
 
 export const DetailsPane: React.FC = () => {
@@ -75,13 +74,7 @@ export const DetailsPane: React.FC = () => {
   };
 
   const renderIcon = (entry: EntryRecord) => {
-    if (entry.is_directory) {
-      return <Folder size={64} color="var(--active-accent)" />;
-    }
-    if (entry.mime_type.startsWith("image/")) {
-      return <ImageIcon size={64} color="#e5a50a" />;
-    }
-    return <FileText size={64} color="var(--dim-fg)" />;
+    return <FileIcon entry={entry} size={64} />;
   };
 
   return (
@@ -154,7 +147,16 @@ export const DetailsPane: React.FC = () => {
                       boxShadow: "0 2px 4px rgba(0,0,0,0.15)",
                     }}
                   >
-                    <StateIcon state={entry.state} size={18} />
+                    <StateIcon
+                      state={entry.state}
+                      size={18}
+                      standalone={true}
+                      isLocal={
+                        entry.account_id === "acc_local" ||
+                        (!entry.remote_id &&
+                          (entry.path?.startsWith("/") || entry.id?.startsWith("/")))
+                      }
+                    />
                   </span>
                 </div>
                 <div style={{ padding: "0 12px", width: "100%" }}>
@@ -446,12 +448,24 @@ export const DetailsPane: React.FC = () => {
               <span style={{ textTransform: "capitalize" }}>{currentAccount?.provider_type || "POSIX"}</span>
             </div>
             {currentAccount?.quota_total && (
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span style={{ color: "var(--dim-fg)" }}>Quota Used</span>
-                <span>
-                  {formatBytes(currentAccount.quota_used || 0)} / {formatBytes(currentAccount.quota_total)}
-                </span>
-              </div>
+              <>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "var(--dim-fg)" }}>Quota Used</span>
+                  <span style={{ fontWeight: 600 }}>
+                    {formatBytes(currentAccount.quota_used || 0)} / {formatBytes(currentAccount.quota_total)}
+                  </span>
+                </div>
+                <div style={{ height: 5, width: "100%", backgroundColor: "rgba(128, 128, 128, 0.22)", borderRadius: 3, overflow: "hidden", marginTop: 4 }}>
+                  <div
+                    style={{
+                      height: "100%",
+                      width: `${(currentAccount.quota_used || 0) > 0 ? Math.max(2, Math.min(100, ((currentAccount.quota_used || 0) / currentAccount.quota_total) * 100)) : 0}%`,
+                      backgroundColor: "var(--adw-accent-blue)",
+                      borderRadius: 3,
+                    }}
+                  />
+                </div>
+              </>
             )}
           </div>
         </div>

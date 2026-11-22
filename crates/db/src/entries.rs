@@ -44,6 +44,7 @@ impl EntryRepository {
             last_accessed_at: row.get("last_accessed_at")?,
             created_at: row.get("created_at")?,
             updated_at: row.get("updated_at")?,
+            thumbnail_url: row.get("thumbnail_url").ok().flatten(),
         })
     }
 
@@ -74,12 +75,14 @@ impl EntryRepository {
                 id, account_id, remote_id, parent_id, name, path,
                 is_directory, size, mtime, ctime, mime_type, etag,
                 content_hash, state, local_path, error_message,
-                sync_version, last_accessed_at, created_at, updated_at
+                sync_version, last_accessed_at, created_at, updated_at,
+                thumbnail_url
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6,
                 ?7, ?8, ?9, ?10, ?11, ?12,
                 ?13, ?14, ?15, ?16,
-                ?17, ?18, ?19, ?20
+                ?17, ?18, ?19, ?20,
+                ?21
             )
             ON CONFLICT(id) DO UPDATE SET
                 account_id = excluded.account_id,
@@ -99,7 +102,8 @@ impl EntryRepository {
                 error_message = excluded.error_message,
                 sync_version = entries.sync_version + 1,
                 last_accessed_at = excluded.last_accessed_at,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                thumbnail_url = COALESCE(excluded.thumbnail_url, entries.thumbnail_url)
             ",
             params![
                 entry.id,
@@ -122,6 +126,7 @@ impl EntryRepository {
                 entry.last_accessed_at,
                 entry.created_at,
                 entry.updated_at,
+                entry.thumbnail_url,
             ],
         )
         .map_err(|e| {
@@ -179,7 +184,7 @@ impl EntryRepository {
     ) -> Result<Option<EntryRecord>> {
         let conn = self.pool.get()?;
         match parent_id {
-            Some(pid) => {
+            Some(pid) if pid != "root" => {
                 let mut stmt = conn
                     .prepare("SELECT * FROM entries WHERE account_id = ?1 AND parent_id = ?2 AND name = ?3")
                     .map_err(|e| CirrusError::Database(e.to_string()))?;
@@ -193,9 +198,11 @@ impl EntryRepository {
                     Ok(None)
                 }
             }
-            None => {
+            _ => {
                 let mut stmt = conn
-                    .prepare("SELECT * FROM entries WHERE account_id = ?1 AND parent_id IS NULL AND name = ?2")
+                    .prepare(
+                        "SELECT * FROM entries WHERE account_id = ?1 AND (parent_id IS NULL OR parent_id = 'root' OR parent_id = (SELECT root_folder_id FROM accounts WHERE id = ?1) OR parent_id NOT IN (SELECT id FROM entries WHERE account_id = ?1)) AND name = ?2",
+                    )
                     .map_err(|e| CirrusError::Database(e.to_string()))?;
                 let mut rows = stmt
                     .query_map(params![account_id, name], Self::row_to_entry)
@@ -220,11 +227,34 @@ impl EntryRepository {
         let mut count_clauses = Vec::new();
 
         if let Some(ref pid) = query.parent_id {
-            where_clauses.push(format!("parent_id = '{}'", pid.replace('\'', "''")));
-            count_clauses.push(format!("parent_id = '{}'", pid.replace('\'', "''")));
+            if pid == "root" {
+                if let Some(ref aid) = query.account_id {
+                    let root_condition = format!(
+                        "(parent_id IS NULL OR parent_id = 'root' OR parent_id = (SELECT root_folder_id FROM accounts WHERE id = '{aid}') OR parent_id NOT IN (SELECT id FROM entries WHERE account_id = '{aid}'))",
+                        aid = aid.replace('\'', "''")
+                    );
+                    where_clauses.push(root_condition.clone());
+                    count_clauses.push(root_condition);
+                } else {
+                    where_clauses.push("(parent_id IS NULL OR parent_id = 'root')".to_string());
+                    count_clauses.push("(parent_id IS NULL OR parent_id = 'root')".to_string());
+                }
+            } else {
+                where_clauses.push(format!("parent_id = '{}'", pid.replace('\'', "''")));
+                count_clauses.push(format!("parent_id = '{}'", pid.replace('\'', "''")));
+            }
         } else {
-            where_clauses.push("parent_id IS NULL".to_string());
-            count_clauses.push("parent_id IS NULL".to_string());
+            if let Some(ref aid) = query.account_id {
+                let root_condition = format!(
+                    "(parent_id IS NULL OR parent_id = 'root' OR parent_id = (SELECT root_folder_id FROM accounts WHERE id = '{aid}') OR parent_id NOT IN (SELECT id FROM entries WHERE account_id = '{aid}'))",
+                    aid = aid.replace('\'', "''")
+                );
+                where_clauses.push(root_condition.clone());
+                count_clauses.push(root_condition);
+            } else {
+                where_clauses.push("(parent_id IS NULL OR parent_id = 'root')".to_string());
+                count_clauses.push("(parent_id IS NULL OR parent_id = 'root')".to_string());
+            }
         }
 
         if let Some(ref aid) = query.account_id {
@@ -407,6 +437,24 @@ impl EntryRepository {
         let conn = self.pool.get()?;
         conn.execute("DELETE FROM entries WHERE id = ?1", params![id])
             .map_err(|e| CirrusError::Database(format!("Delete failed: {}", e)))?;
+        Ok(())
+    }
+
+    pub fn delete_entries_for_account(&self, account_id: &str) -> Result<()> {
+        let conn = self.pool.get()?;
+        conn.execute("DELETE FROM entries WHERE account_id = ?1", params![account_id])
+            .map_err(|e| CirrusError::Database(format!("Delete entries for account failed: {}", e)))?;
+        Ok(())
+    }
+
+    pub fn reset_error_entries_for_account(&self, account_id: &str) -> Result<()> {
+        let conn = self.pool.get()?;
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE entries SET state = 'cloud_only', error_message = NULL, updated_at = ?1 WHERE account_id = ?2 AND state = 'error'",
+            params![now, account_id],
+        )
+        .map_err(|e| CirrusError::Database(format!("Reset error entries failed: {}", e)))?;
         Ok(())
     }
 }

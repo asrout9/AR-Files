@@ -69,6 +69,17 @@ impl GenericCloudProvider {
         if sub.is_empty() {
             base.to_string()
         } else {
+            if sub.starts_with("http://") || sub.starts_with("https://") {
+                return sub.to_string();
+            }
+            if let Ok(url) = reqwest::Url::parse(base) {
+                let base_path = url.path().trim_matches('/');
+                if !base_path.is_empty() && (sub.starts_with(base_path) || sub.starts_with(&format!("/{}", base_path))) {
+                    let origin = format!("{}://{}", url.scheme(), url.host_str().unwrap_or(""));
+                    let port_str = url.port().map(|p| format!(":{}", p)).unwrap_or_default();
+                    return format!("{}{}/{}", origin, port_str, sub.trim_start_matches('/'));
+                }
+            }
             format!("{}/{}", base, sub)
         }
     }
@@ -113,13 +124,22 @@ impl CloudProvider for GenericCloudProvider {
             return Err(CirrusError::Network("Account is offline".to_string()));
         }
 
-        let target_path = folder_id.unwrap_or("");
-        let url = self.item_url(target_path);
+        let clean_folder = folder_id.map(|id| {
+            id.strip_prefix(&format!("{}:", self.account_id)).unwrap_or(id)
+        }).unwrap_or("");
+        let url = self.item_url(clean_folder);
+
+        let propfind_body = r#"<?xml version="1.0" encoding="utf-8" ?>
+<D:propfind xmlns:D="DAV:">
+  <D:allprop/>
+</D:propfind>"#;
 
         let mut req = self
             .client
             .request(reqwest::Method::from_bytes(b"PROPFIND").unwrap(), &url)
-            .header("Depth", "1");
+            .header("Depth", "1")
+            .header("Content-Type", "application/xml; charset=utf-8")
+            .body(propfind_body);
 
         if let (Some(u), Ok(Some(p))) = (&self.config.username, self.get_password().await) {
             req = req.basic_auth(u, Some(p));
@@ -130,13 +150,29 @@ impl CloudProvider for GenericCloudProvider {
             .await
             .map_err(|e| CirrusError::Network(format!("Generic cloud PROPFIND failed: {}", e)))?;
 
-        // Fallback: if server doesn't respond with XML or in test mock mode, return standard list
-        if !resp.status().is_success() {
-            return Ok((Vec::new(), None));
+        let status = resp.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(CirrusError::Authentication(format!(
+                "Authentication failed (HTTP {}): check username and password",
+                status
+            )));
         }
 
-        // Return parsed or empty child list
-        Ok((Vec::new(), None))
+        if !status.is_success() && status.as_u16() != 207 {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(CirrusError::Network(format!(
+                "WebDAV PROPFIND request failed (HTTP {}): {}",
+                status, body
+            )));
+        }
+
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| CirrusError::Network(format!("Failed reading WebDAV response: {}", e)))?;
+
+        let entries = parse_webdav_multistatus(&self.account_id, folder_id, &url, &text);
+        Ok((entries, None))
     }
 
     async fn get_metadata(&self, id: &str) -> Result<EntryRecord> {
@@ -157,6 +193,7 @@ impl CloudProvider for GenericCloudProvider {
             content_hash: None,
             state: FileState::CloudOnly,
             local_path: None,
+            thumbnail_url: None,
             error_message: None,
             sync_version: 1,
             last_accessed_at: None,
@@ -174,7 +211,8 @@ impl CloudProvider for GenericCloudProvider {
     }
 
     async fn download(&self, id: &str, range: Option<ByteRange>) -> Result<Bytes> {
-        let url = self.item_url(id);
+        let clean_id = id.strip_prefix(&format!("{}:", self.account_id)).unwrap_or(id);
+        let url = self.item_url(clean_id);
 
         let mut req = self.client.get(&url);
         if let (Some(u), Ok(Some(p))) = (&self.config.username, self.get_password().await) {
@@ -197,6 +235,14 @@ impl CloudProvider for GenericCloudProvider {
             .send()
             .await
             .map_err(|e| CirrusError::Network(format!("Generic cloud download failed: {}", e)))?;
+
+        let status = resp.status();
+        if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
+            return Err(CirrusError::Network(format!(
+                "Generic cloud download failed with status {}",
+                status
+            )));
+        }
 
         let bytes = resp
             .bytes()
@@ -259,6 +305,7 @@ impl CloudProvider for GenericCloudProvider {
             content_hash: None,
             state: FileState::CloudOnly,
             local_path: None,
+            thumbnail_url: None,
             error_message: None,
             sync_version: 1,
             last_accessed_at: None,
@@ -310,6 +357,7 @@ impl CloudProvider for GenericCloudProvider {
             content_hash: None,
             state: FileState::CloudOnly,
             local_path: None,
+            thumbnail_url: None,
             error_message: None,
             sync_version: 1,
             last_accessed_at: None,
@@ -387,5 +435,253 @@ impl CloudProvider for GenericCloudProvider {
 
     async fn versions(&self, _id: &str) -> Result<Vec<FileVersion>> {
         Ok(Vec::new())
+    }
+}
+
+pub fn extract_tag_content(xml: &str, tag_name: &str) -> Option<String> {
+    let lower_xml = xml.to_lowercase();
+    let lower_tag = tag_name.to_lowercase();
+
+    let mut search_idx = 0;
+    while let Some(start_pos) = lower_xml[search_idx..].find('<') {
+        let abs_start = search_idx + start_pos;
+        let tag_open_end = match lower_xml[abs_start..].find('>') {
+            Some(p) => abs_start + p,
+            None => break,
+        };
+        let tag_header = &lower_xml[abs_start + 1..tag_open_end];
+        let tag_without_attrs = tag_header.split_whitespace().next().unwrap_or("");
+        let actual_tag = tag_without_attrs.split(':').last().unwrap_or(tag_without_attrs);
+
+        if actual_tag == lower_tag {
+            if tag_header.ends_with('/') {
+                return Some(String::new());
+            }
+            let content_start = tag_open_end + 1;
+            let mut close_search = content_start;
+            while let Some(close_start) = lower_xml[close_search..].find("</") {
+                let abs_close = close_search + close_start;
+                if let Some(close_end) = lower_xml[abs_close..].find('>') {
+                    let close_header = &lower_xml[abs_close + 2..abs_close + close_end];
+                    let close_tag = close_header.split(':').last().unwrap_or(close_header).trim();
+                    if close_tag == lower_tag {
+                        return Some(xml[content_start..abs_close].trim().to_string());
+                    }
+                    close_search = abs_close + close_end + 1;
+                } else {
+                    break;
+                }
+            }
+        }
+        search_idx = tag_open_end + 1;
+    }
+    None
+}
+
+pub fn tag_exists(xml: &str, tag_name: &str) -> bool {
+    let lower_xml = xml.to_lowercase();
+    let lower_tag = tag_name.to_lowercase();
+    let mut search_idx = 0;
+    while let Some(start_pos) = lower_xml[search_idx..].find('<') {
+        let abs_start = search_idx + start_pos;
+        let tag_open_end = match lower_xml[abs_start..].find('>') {
+            Some(p) => abs_start + p,
+            None => break,
+        };
+        let tag_header = &lower_xml[abs_start + 1..tag_open_end];
+        let tag_without_attrs = tag_header.split_whitespace().next().unwrap_or("");
+        let actual_tag = tag_without_attrs
+            .trim_end_matches('/')
+            .split(':')
+            .last()
+            .unwrap_or(tag_without_attrs);
+        if actual_tag == lower_tag {
+            return true;
+        }
+        search_idx = tag_open_end + 1;
+    }
+    false
+}
+
+pub fn parse_webdav_multistatus(
+    account_id: &str,
+    folder_id: Option<&str>,
+    req_url: &str,
+    xml: &str,
+) -> Vec<EntryRecord> {
+    let mut entries = Vec::new();
+    let lower_xml = xml.to_lowercase();
+    let mut pos = 0;
+
+    let req_path = if let Ok(parsed) = reqwest::Url::parse(req_url) {
+        parsed.path().trim_end_matches('/').to_string()
+    } else {
+        req_url.trim_end_matches('/').to_string()
+    };
+
+    while pos < lower_xml.len() {
+        let next_start = match lower_xml[pos..].find("<d:response")
+            .or_else(|| lower_xml[pos..].find("<response"))
+        {
+            Some(s) => pos + s,
+            None => break,
+        };
+
+        let is_d_prefix = lower_xml[next_start..].starts_with("<d:response");
+        let close_tag = if is_d_prefix { "</d:response>" } else { "</response>" };
+
+        let block_end = match lower_xml[next_start..].find(close_tag) {
+            Some(e) => next_start + e + close_tag.len(),
+            None => break,
+        };
+
+        let block = &xml[next_start..block_end];
+        pos = block_end;
+
+        let href = match extract_tag_content(block, "href") {
+            Some(h) if !h.is_empty() => h,
+            _ => continue,
+        };
+
+        let decoded_href = urlencoding::decode(&href)
+            .map(|cow| cow.into_owned())
+            .unwrap_or_else(|_| href.clone());
+
+        let href_path = if let Ok(parsed) = reqwest::Url::parse(&decoded_href) {
+            parsed.path().trim_end_matches('/').to_string()
+        } else {
+            decoded_href.trim_end_matches('/').to_string()
+        };
+
+        // Skip self (the directory itself)
+        if href_path == req_path || href_path.is_empty() {
+            continue;
+        }
+
+        let is_dir = tag_exists(block, "collection");
+
+        let display_name = extract_tag_content(block, "displayname");
+        let name = match display_name {
+            Some(ref dn) if !dn.trim().is_empty() => dn.trim().to_string(),
+            _ => href_path
+                .split('/')
+                .filter(|s| !s.is_empty())
+                .last()
+                .unwrap_or("unnamed")
+                .to_string(),
+        };
+
+        if name.is_empty() {
+            continue;
+        }
+
+        let size: u64 = extract_tag_content(block, "getcontentlength")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        let mime = if is_dir {
+            "inode/directory".to_string()
+        } else {
+            extract_tag_content(block, "getcontenttype")
+                .unwrap_or_else(|| "application/octet-stream".to_string())
+        };
+
+        let etag = extract_tag_content(block, "getetag")
+            .map(|e| e.trim_matches('"').to_string());
+
+        let mtime = extract_tag_content(block, "getlastmodified")
+            .and_then(|lm| chrono::DateTime::parse_from_rfc2822(&lm).ok())
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+
+        let remote_id = href_path.clone();
+        let path = match folder_id {
+            Some(parent) => format!("{}/{}", parent.trim_end_matches('/'), name),
+            None => format!("/{}", name),
+        };
+
+        entries.push(EntryRecord {
+            id: format!("{}:{}", account_id, remote_id),
+            account_id: account_id.to_string(),
+            remote_id: Some(remote_id),
+            parent_id: folder_id.map(|s| s.to_string()),
+            name,
+            path,
+            is_directory: is_dir,
+            size: if is_dir { 0 } else { size },
+            mtime,
+            ctime: Some(mtime),
+            mime_type: mime,
+            etag,
+            content_hash: None,
+            state: FileState::CloudOnly,
+            local_path: None,
+            thumbnail_url: None,
+            error_message: None,
+            sync_version: 1,
+            last_accessed_at: None,
+            created_at: mtime,
+            updated_at: mtime,
+        });
+    }
+
+    entries
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_webdav_multistatus() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>/remote.php/dav/files/user/</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:resourcetype><d:collection/></d:resourcetype>
+      </d:prop>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/remote.php/dav/files/user/Documents/</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:resourcetype><d:collection/></d:resourcetype>
+        <d:displayname>Documents</d:displayname>
+        <d:getlastmodified>Wed, 12 Oct 2022 14:20:10 GMT</d:getlastmodified>
+      </d:prop>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/remote.php/dav/files/user/Report.pdf</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:resourcetype/>
+        <d:getcontentlength>1048576</d:getcontentlength>
+        <d:getcontenttype>application/pdf</d:getcontenttype>
+        <d:displayname>Report.pdf</d:displayname>
+      </d:prop>
+    </d:propstat>
+  </d:response>
+</d:multistatus>"#;
+
+        let entries = parse_webdav_multistatus(
+            "acc_test",
+            None,
+            "https://cloud.example.com/remote.php/dav/files/user/",
+            xml,
+        );
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "Documents");
+        assert!(entries[0].is_directory);
+        assert_eq!(entries[0].mime_type, "inode/directory");
+
+        assert_eq!(entries[1].name, "Report.pdf");
+        assert!(!entries[1].is_directory);
+        assert_eq!(entries[1].size, 1048576);
+        assert_eq!(entries[1].mime_type, "application/pdf");
     }
 }

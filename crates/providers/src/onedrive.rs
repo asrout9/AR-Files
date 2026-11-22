@@ -8,6 +8,7 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::credentials::CredentialsManager;
+use crate::oauth::OneDriveOAuthFlow;
 use crate::trait_def::CloudProvider;
 use crate::types::{
     ByteRange, DeltaChange, DeltaFeed, FileVersion, ProviderCapabilities, ProviderQuota,
@@ -33,6 +34,7 @@ pub struct OneDriveItem {
     #[serde(rename = "webUrl")]
     pub web_url: Option<String>,
     pub deleted: Option<serde_json::Value>,
+    pub thumbnails: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,12 +69,14 @@ pub struct OneDriveProvider {
     account_id: String,
     account_name: String,
     client: reqwest::Client,
+    oauth_flow: Arc<OneDriveOAuthFlow>,
     credentials_mgr: CredentialsManager,
     is_offline: Arc<AtomicBool>,
 }
 
 impl OneDriveProvider {
     pub fn new(account_id: &str, account_name: &str, credentials_mgr: CredentialsManager) -> Self {
+        let oauth_flow = Arc::new(OneDriveOAuthFlow::new(credentials_mgr.clone()));
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(45))
             .build()
@@ -82,6 +86,28 @@ impl OneDriveProvider {
             account_id: account_id.to_string(),
             account_name: account_name.to_string(),
             client,
+            oauth_flow,
+            credentials_mgr,
+            is_offline: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn with_oauth_flow(
+        account_id: &str,
+        account_name: &str,
+        oauth_flow: Arc<OneDriveOAuthFlow>,
+        credentials_mgr: CredentialsManager,
+    ) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(45))
+            .build()
+            .unwrap_or_default();
+
+        Self {
+            account_id: account_id.to_string(),
+            account_name: account_name.to_string(),
+            client,
+            oauth_flow,
             credentials_mgr,
             is_offline: Arc::new(AtomicBool::new(false)),
         }
@@ -95,6 +121,73 @@ impl OneDriveProvider {
         self.is_offline.load(Ordering::SeqCst)
     }
 
+    pub async fn fetch_about(&self) -> Result<(Option<String>, String, ProviderQuota)> {
+        // Fetch user profile email first from /v1.0/me
+        let profile_url = "https://graph.microsoft.com/v1.0/me";
+        let email = if let Ok(resp) = self
+            .execute_with_retry(|t| {
+                let u = profile_url.to_string();
+                let c = self.client.clone();
+                async move { c.get(&u).bearer_auth(t).send().await }
+            })
+            .await
+        {
+            if let Ok(val) = resp.json::<serde_json::Value>().await {
+                val.get("mail")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| val.get("userPrincipalName").and_then(|v| v.as_str()))
+                    .map(|s| s.to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Fetch drive quota (calls /v1.0/me/drive)
+        let quota = match self.quota().await {
+            Ok(q) => q,
+            Err(CirrusError::AuthRequired { account_id, reason }) => {
+                let user_hint = match &email {
+                    Some(m) => format!("for Microsoft account '{}'", m),
+                    None => "for your Microsoft account".to_string(),
+                };
+                return Err(CirrusError::AuthRequired {
+                    account_id,
+                    reason: format!(
+                        "Token {} lacks OneDrive permissions: {}. In Microsoft Graph Explorer, run 'GET https://graph.microsoft.com/v1.0/me/drive' and click 'Consent' next to Files.ReadWrite.",
+                        user_hint, reason
+                    ),
+                });
+            }
+            Err(e) => return Err(e),
+        };
+
+        // Fetch root drive folder ID
+        let root_url = format!("{}/root?select=id", ONEDRIVE_API_BASE);
+        let root_id = if let Ok(resp) = self
+            .execute_with_retry(|t| {
+                let u = root_url.clone();
+                let c = self.client.clone();
+                async move { c.get(&u).bearer_auth(t).send().await }
+            })
+            .await
+        {
+            if let Ok(val) = resp.json::<serde_json::Value>().await {
+                val.get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("root")
+                    .to_string()
+            } else {
+                "root".to_string()
+            }
+        } else {
+            "root".to_string()
+        };
+
+        Ok((email, root_id, quota))
+    }
+
     async fn get_access_token(&self) -> Result<String> {
         if self.is_offline() {
             return Err(CirrusError::Network(
@@ -104,15 +197,20 @@ impl OneDriveProvider {
 
         let access_key = CredentialsManager::access_token_key(&self.account_id);
         if let Some(token) = self.credentials_mgr.get_secret(&access_key)? {
-            if !token.is_empty() {
-                return Ok(token);
+            let clean = token
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .trim_start_matches("Bearer ")
+                .trim_start_matches("bearer ")
+                .trim();
+            if !clean.is_empty() {
+                return Ok(clean.to_string());
             }
         }
 
-        Err(CirrusError::AuthRequired {
-            account_id: self.account_id.clone(),
-            reason: "OneDrive credentials expired or missing".to_string(),
-        })
+        // Try refreshing access token
+        self.oauth_flow.refresh_access_token(&self.account_id).await
     }
 
     fn convert_onedrive_item(&self, item: &OneDriveItem) -> EntryRecord {
@@ -138,6 +236,17 @@ impl OneDriveProvider {
             .map(|dt| dt.timestamp_millis())
             .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
 
+        let thumbnail_url = item.thumbnails.as_ref().and_then(|sets| {
+            sets.first().and_then(|set| {
+                set.get("medium")
+                    .or_else(|| set.get("large"))
+                    .or_else(|| set.get("small"))
+                    .and_then(|size_obj| size_obj.get("url"))
+                    .and_then(|u| u.as_str())
+                    .map(|s| s.to_string())
+            })
+        });
+
         EntryRecord {
             id: item.id.clone(),
             account_id: self.account_id.clone(),
@@ -154,6 +263,7 @@ impl OneDriveProvider {
             content_hash: None,
             state: FileState::CloudOnly,
             local_path: None,
+            thumbnail_url,
             error_message: None,
             sync_version: 1,
             last_accessed_at: None,
@@ -171,7 +281,7 @@ impl OneDriveProvider {
             return Err(CirrusError::Network("Account is offline".to_string()));
         }
 
-        let token = self.get_access_token().await?;
+        let mut token = self.get_access_token().await?;
         let mut attempts = 0;
         let max_attempts = 3;
         let mut backoff = Duration::from_millis(500);
@@ -181,10 +291,54 @@ impl OneDriveProvider {
             match make_request(token.clone()).await {
                 Ok(resp) => {
                     let status = resp.status();
-                    if status == reqwest::StatusCode::UNAUTHORIZED {
+                    if status == reqwest::StatusCode::UNAUTHORIZED && attempts < max_attempts {
+                        warn!(
+                            "Access token expired for OneDrive account '{}', refreshing...",
+                            self.account_id
+                        );
+                        if let Ok(new_token) =
+                            self.oauth_flow.refresh_access_token(&self.account_id).await
+                        {
+                            token = new_token;
+                            continue;
+                        }
+                    }
+
+                    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+                        let err_text = resp.text().await.unwrap_or_default();
+                        let raw_msg = serde_json::from_str::<serde_json::Value>(&err_text)
+                            .ok()
+                            .and_then(|v| {
+                                v.get("error")
+                                    .and_then(|e| e.get("message"))
+                                    .and_then(|m| m.as_str())
+                                    .map(|s| s.to_string())
+                            })
+                            .unwrap_or_else(|| {
+                                if err_text.trim().is_empty() {
+                                    format!("OneDrive access token rejected ({})", status.as_u16())
+                                } else {
+                                    err_text
+                                }
+                            });
+
+                        let error_msg = if raw_msg.to_lowercase().contains("access denied")
+                            || raw_msg.to_lowercase().contains("invalidauthenticationtoken")
+                            || raw_msg.to_lowercase().contains("permission")
+                            || raw_msg.to_lowercase().contains("rejected")
+                        {
+                            format!(
+                                "{} (Status {}). The token has expired or lacks OneDrive permissions. Please reconnect via browser.",
+                                raw_msg,
+                                status.as_u16()
+                            )
+                        } else {
+                            raw_msg
+                        };
+
                         return Err(CirrusError::AuthRequired {
                             account_id: self.account_id.clone(),
-                            reason: "OneDrive access token rejected (401)".to_string(),
+                            reason: error_msg,
                         });
                     }
 
@@ -254,8 +408,10 @@ impl CloudProvider for OneDriveProvider {
             token.to_string()
         } else {
             match folder_id {
-                Some(id) => format!("{}/items/{}/children", ONEDRIVE_API_BASE, id),
-                None => format!("{}/root/children", ONEDRIVE_API_BASE),
+                Some(id) if id != "root" && !id.is_empty() => {
+                    format!("{}/items/{}/children?$expand=thumbnails", ONEDRIVE_API_BASE, id)
+                }
+                _ => format!("{}/root/children?$expand=thumbnails", ONEDRIVE_API_BASE),
             }
         };
 
@@ -283,7 +439,11 @@ impl CloudProvider for OneDriveProvider {
     }
 
     async fn get_metadata(&self, id: &str) -> Result<EntryRecord> {
-        let url = format!("{}/items/{}", ONEDRIVE_API_BASE, id);
+        let url = if id == "root" || id.is_empty() {
+            format!("{}/root?$expand=thumbnails", ONEDRIVE_API_BASE)
+        } else {
+            format!("{}/items/{}?$expand=thumbnails", ONEDRIVE_API_BASE, id)
+        };
 
         let resp = self
             .execute_with_retry(|auth_token| {
@@ -722,5 +882,25 @@ impl CloudProvider for OneDriveProvider {
             }
             Err(_) => Ok(Vec::new()),
         }
+    }
+
+    async fn fetch_thumbnail_bytes(&self, url: &str) -> Result<Bytes> {
+        let resp = self
+            .execute_with_retry(|auth_token| {
+                let req_url = url.to_string();
+                let client = self.client.clone();
+                async move {
+                    client
+                        .get(&req_url)
+                        .bearer_auth(auth_token)
+                        .send()
+                        .await
+                }
+            })
+            .await?;
+
+        resp.bytes()
+            .await
+            .map_err(|e| CirrusError::Network(format!("Failed to read thumbnail bytes: {}", e)))
     }
 }

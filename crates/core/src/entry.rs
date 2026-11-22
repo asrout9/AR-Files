@@ -27,6 +27,7 @@ pub struct EntryRecord {
     pub last_accessed_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
+    pub thumbnail_url: Option<String>,
 }
 
 impl EntryRecord {
@@ -66,6 +67,7 @@ impl EntryRecord {
             last_accessed_at: None,
             created_at: now,
             updated_at: now,
+            thumbnail_url: None,
         }
     }
 }

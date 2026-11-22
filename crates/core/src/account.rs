@@ -6,6 +6,7 @@ use crate::entry::{AccountId, EntryId};
 #[serde(rename_all = "snake_case")]
 pub enum ProviderType {
     GoogleDrive,
+    #[serde(rename = "onedrive", alias = "one_drive")]
     OneDrive,
     Dropbox,
     Nextcloud,

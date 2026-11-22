@@ -11,7 +11,11 @@ pub use credentials::CredentialsManager;
 pub use gdrive::GoogleDriveProvider;
 pub use generic::{GenericCloudConfig, GenericCloudProvider};
 pub use mock::MockCloudProvider;
-pub use oauth::{GoogleOAuthFlow, OAuthTokenResponse, PkceChallenge};
+pub use oauth::{
+    GoogleOAuthFlow, OAuthTokenResponse, OneDriveOAuthFlow, PkceChallenge,
+    DEFAULT_GOOGLE_CLIENT_ID, DEFAULT_GOOGLE_CLIENT_SECRET, DEFAULT_ONEDRIVE_CLIENT_ID,
+    DEFAULT_ONEDRIVE_CLIENT_SECRET,
+};
 pub use onedrive::OneDriveProvider;
 pub use trait_def::CloudProvider;
 pub use types::{

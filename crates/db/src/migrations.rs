@@ -3,7 +3,7 @@ use tracing::info;
 
 use cirrus_core::error::{CirrusError, Result};
 
-pub const CURRENT_SCHEMA_VERSION: i32 = 1;
+pub const CURRENT_SCHEMA_VERSION: i32 = 2;
 
 pub fn apply_migrations(conn: &mut Connection) -> Result<()> {
     conn.execute_batch(
@@ -69,7 +69,8 @@ pub fn apply_migrations(conn: &mut Connection) -> Result<()> {
                 sync_version INTEGER NOT NULL DEFAULT 1,
                 last_accessed_at INTEGER,
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
+                updated_at INTEGER NOT NULL,
+                thumbnail_url TEXT
             );
 
             -- Indexes for sub-10ms directory listings and sorting
@@ -157,6 +158,28 @@ pub fn apply_migrations(conn: &mut Connection) -> Result<()> {
         tx.commit()
             .map_err(|e| CirrusError::Database(format!("Failed to commit migration v1: {}", e)))?;
         info!("Migration v1 applied successfully.");
+    }
+
+    if current_version < 2 {
+        info!("Applying migration v2 (add thumbnail_url to entries)...");
+        let has_col: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('entries') WHERE name = 'thumbnail_url'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !has_col {
+            let _ = conn.execute("ALTER TABLE entries ADD COLUMN thumbnail_url TEXT;", []);
+        }
+
+        let _ = conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (2, strftime('%s', 'now'))",
+            [],
+        );
+        info!("Migration v2 applied successfully.");
     }
 
     Ok(())

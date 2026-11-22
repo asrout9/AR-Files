@@ -118,7 +118,16 @@ export const QuickPreviewModal: React.FC = () => {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-            <StateIcon state={entry.state} size={18} />
+            <StateIcon
+              state={entry.state}
+              size={18}
+              standalone={true}
+              isLocal={
+                entry.account_id === "acc_local" ||
+                (!entry.remote_id &&
+                  (entry.path?.startsWith("/") || entry.id?.startsWith("/")))
+              }
+            />
             <div style={{ minWidth: 0 }}>
               <div
                 style={{

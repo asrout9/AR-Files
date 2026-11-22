@@ -12,7 +12,9 @@ use crate::credentials::CredentialsManager;
 use cirrus_core::error::{CirrusError, Result};
 
 pub const DEFAULT_GOOGLE_CLIENT_ID: &str =
-    "923847291847-arfilesdesktopclientfedora.apps.googleusercontent.com";
+    "595013732528-llk8trb03f0ldpqq6nprjp1s79596646.apps.googleusercontent.com";
+pub const DEFAULT_GOOGLE_CLIENT_SECRET: &str =
+    "5ntt6GbbkjnTVXx-MSxbmx5e";
 pub const GOOGLE_AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 pub const GOOGLE_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 pub const GOOGLE_DRIVE_SCOPE: &str = "https://www.googleapis.com/auth/drive";
@@ -65,7 +67,9 @@ impl GoogleOAuthFlow {
     pub fn new(credentials_mgr: CredentialsManager) -> Self {
         let client_id = std::env::var("GOOGLE_DRIVE_CLIENT_ID")
             .unwrap_or_else(|_| DEFAULT_GOOGLE_CLIENT_ID.to_string());
-        let client_secret = std::env::var("GOOGLE_DRIVE_CLIENT_SECRET").ok();
+        let client_secret = std::env::var("GOOGLE_DRIVE_CLIENT_SECRET")
+            .ok()
+            .or_else(|| Some(DEFAULT_GOOGLE_CLIENT_SECRET.to_string()));
 
         Self {
             client_id,
@@ -303,6 +307,235 @@ impl GoogleOAuthFlow {
         let access_key = CredentialsManager::access_token_key(account_id);
         self.credentials_mgr
             .store_secret(&access_key, &token_data.access_token)?;
+
+        Ok(token_data.access_token)
+    }
+}
+
+pub const DEFAULT_ONEDRIVE_CLIENT_ID: &str = "b15665d9-eda6-4092-8539-0eec376afd59";
+pub const DEFAULT_ONEDRIVE_CLIENT_SECRET: &str = "qtyfaBBYA403=unZUP40~_#";
+pub const ONEDRIVE_AUTH_ENDPOINT: &str =
+    "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
+pub const ONEDRIVE_TOKEN_ENDPOINT: &str =
+    "https://login.microsoftonline.com/common/oauth2/v2.0/token";
+pub const ONEDRIVE_SCOPE: &str =
+    "offline_access Files.ReadWrite Files.ReadWrite.All User.Read";
+
+pub struct OneDriveOAuthFlow {
+    client_id: String,
+    client_secret: Option<String>,
+    credentials_mgr: CredentialsManager,
+}
+
+impl OneDriveOAuthFlow {
+    pub fn new(credentials_mgr: CredentialsManager) -> Self {
+        let client_id = std::env::var("ONEDRIVE_CLIENT_ID")
+            .unwrap_or_else(|_| DEFAULT_ONEDRIVE_CLIENT_ID.to_string());
+        let client_secret = std::env::var("ONEDRIVE_CLIENT_SECRET")
+            .ok()
+            .or_else(|| Some(DEFAULT_ONEDRIVE_CLIENT_SECRET.to_string()));
+        Self {
+            client_id,
+            client_secret,
+            credentials_mgr,
+        }
+    }
+
+    pub fn with_client(
+        client_id: String,
+        client_secret: Option<String>,
+        credentials_mgr: CredentialsManager,
+    ) -> Self {
+        Self {
+            client_id,
+            client_secret,
+            credentials_mgr,
+        }
+    }
+
+    pub async fn execute_flow(&self, account_id: &str) -> Result<OAuthTokenResponse> {
+        info!("Initiating Microsoft OneDrive OAuth 2.0 PKCE authentication flow...");
+
+        let listener = match TcpListener::bind("127.0.0.1:53682").await {
+            Ok(l) => l,
+            Err(e) => {
+                warn!("Could not bind to 127.0.0.1:53682: {}. Trying 0.0.0.0:53682...", e);
+                TcpListener::bind("0.0.0.0:53682").await.map_err(|e2| {
+                    CirrusError::Io(format!("Failed to bind loopback OAuth listener on port 53682: {}", e2))
+                })?
+            }
+        };
+        let redirect_uri = "http://localhost:53682/".to_string();
+
+        let pkce = PkceChallenge::generate();
+
+        let auth_url = format!(
+            "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&code_challenge={}&code_challenge_method=S256&state={}&prompt=select_account",
+            ONEDRIVE_AUTH_ENDPOINT,
+            urlencoding::encode(&self.client_id),
+            urlencoding::encode(&redirect_uri),
+            urlencoding::encode(ONEDRIVE_SCOPE),
+            urlencoding::encode(&pkce.challenge),
+            urlencoding::encode(&pkce.state)
+        );
+
+        info!("Launching browser for OneDrive OAuth authorization at: {}", auth_url);
+
+        let open_status = tokio::process::Command::new("xdg-open")
+            .arg(&auth_url)
+            .status()
+            .await;
+        if let Err(e) = open_status {
+            warn!("Failed to launch xdg-open: {}. Manual URL: {}", e, auth_url);
+        }
+
+        let (mut socket, _) = timeout(Duration::from_secs(120), listener.accept())
+            .await
+            .map_err(|_| CirrusError::Timeout)?
+            .map_err(|e| CirrusError::Io(format!("Failed to accept OAuth redirect: {}", e)))?;
+
+        let mut buffer = [0u8; 4096];
+        let bytes_read = socket
+            .read(&mut buffer)
+            .await
+            .map_err(|e| CirrusError::Io(e.to_string()))?;
+        let request_str = String::from_utf8_lossy(&buffer[..bytes_read]);
+
+        let (code, state) = parse_oauth_callback(&request_str)?;
+
+        if state != pkce.state {
+            let error_html = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\n\r\n<html><body><h2>State Mismatch Error</h2></body></html>";
+            let _ = socket.write_all(error_html.as_bytes()).await;
+            return Err(CirrusError::Validation("OAuth state mismatch detected".to_string()));
+        }
+
+        let success_html = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n\
+            <!DOCTYPE html>\
+            <html lang=\"en\">\
+            <head>\
+              <meta charset=\"utf-8\">\
+              <title>AR Files Authentication</title>\
+              <style>\
+                body { font-family: system-ui, -apple-system, sans-serif; background: #242424; color: #ffffff; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }\
+                .card { background: #303030; border: 1px solid #454545; border-radius: 12px; padding: 32px 40px; text-align: center; box-shadow: 0 4px 16px rgba(0,0,0,0.4); max-width: 420px; }\
+                h2 { color: #78aeed; margin-top: 0; }\
+                p { color: #d0d0d0; font-size: 14px; line-height: 1.5; }\
+              </style>\
+            </head>\
+            <body>\
+              <div class=\"card\">\
+                <h2>Connected to Microsoft OneDrive</h2>\
+                <p>Authentication succeeded! You can close this tab and return to AR Files.</p>\
+              </div>\
+            </body>\
+            </html>";
+        let _ = socket.write_all(success_html.as_bytes()).await;
+        let _ = socket.flush().await;
+
+        let token_resp = self.exchange_code(&code, &redirect_uri, &pkce.verifier).await?;
+
+        if let Some(ref refresh_token) = token_resp.refresh_token {
+            let key = CredentialsManager::refresh_token_key(account_id);
+            self.credentials_mgr.store_secret(&key, refresh_token)?;
+            info!("Stored OneDrive refresh token in keyring for account '{}'", account_id);
+        }
+
+        let access_key = CredentialsManager::access_token_key(account_id);
+        self.credentials_mgr.store_secret(&access_key, &token_resp.access_token)?;
+
+        Ok(token_resp)
+    }
+
+    pub async fn exchange_code(
+        &self,
+        code: &str,
+        redirect_uri: &str,
+        verifier: &str,
+    ) -> Result<OAuthTokenResponse> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| CirrusError::Io(e.to_string()))?;
+
+        let mut params = vec![
+            ("client_id", self.client_id.as_str()),
+            ("code", code),
+            ("grant_type", "authorization_code"),
+            ("redirect_uri", redirect_uri),
+            ("code_verifier", verifier),
+        ];
+
+        if let Some(ref sec) = self.client_secret {
+            params.push(("client_secret", sec.as_str()));
+        }
+
+        let resp = client
+            .post(ONEDRIVE_TOKEN_ENDPOINT)
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| CirrusError::Network(format!("Token exchange request failed: {}", e)))?;
+
+        if !resp.status().is_success() {
+            let err_text = resp.text().await.unwrap_or_default();
+            error!("OneDrive token exchange error: {}", err_text);
+            return Err(CirrusError::Authentication(format!("Token exchange failed: {}", err_text)));
+        }
+
+        let token_data: OAuthTokenResponse = resp
+            .json()
+            .await
+            .map_err(|e| CirrusError::Serialization(e.to_string()))?;
+
+        Ok(token_data)
+    }
+
+    pub async fn refresh_access_token(&self, account_id: &str) -> Result<String> {
+        let key = CredentialsManager::refresh_token_key(account_id);
+        let refresh_token = self.credentials_mgr.get_secret(&key)?.ok_or_else(|| {
+            CirrusError::Authentication("No refresh token stored in Keyring".to_string())
+        })?;
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| CirrusError::Io(e.to_string()))?;
+
+        let mut params = vec![
+            ("client_id", self.client_id.as_str()),
+            ("refresh_token", refresh_token.as_str()),
+            ("grant_type", "refresh_token"),
+            ("scope", ONEDRIVE_SCOPE),
+        ];
+
+        if let Some(ref sec) = self.client_secret {
+            params.push(("client_secret", sec.as_str()));
+        }
+
+        let resp = client
+            .post(ONEDRIVE_TOKEN_ENDPOINT)
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| CirrusError::Network(format!("Token refresh request failed: {}", e)))?;
+
+        if !resp.status().is_success() {
+            let err_text = resp.text().await.unwrap_or_default();
+            warn!("OneDrive token refresh failed: {}. Account requires re-login.", err_text);
+            return Err(CirrusError::Authentication(format!("Refresh token invalid: {}", err_text)));
+        }
+
+        let token_data: OAuthTokenResponse = resp
+            .json()
+            .await
+            .map_err(|e| CirrusError::Serialization(e.to_string()))?;
+
+        if let Some(ref new_ref) = token_data.refresh_token {
+            let _ = self.credentials_mgr.store_secret(&key, new_ref);
+        }
+
+        let access_key = CredentialsManager::access_token_key(account_id);
+        self.credentials_mgr.store_secret(&access_key, &token_data.access_token)?;
 
         Ok(token_data.access_token)
     }

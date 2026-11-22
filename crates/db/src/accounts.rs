@@ -18,7 +18,7 @@ impl AccountRepository {
         let provider_str: String = row.get("provider_type")?;
         let provider_type = match provider_str.as_str() {
             "google_drive" => ProviderType::GoogleDrive,
-            "onedrive" => ProviderType::OneDrive,
+            "onedrive" | "one_drive" => ProviderType::OneDrive,
             "dropbox" => ProviderType::Dropbox,
             "nextcloud" => ProviderType::Nextcloud,
             "webdav" => ProviderType::WebDAV,
@@ -177,8 +177,22 @@ impl AccountRepository {
         Ok(())
     }
 
+    pub fn update_root_folder_id(&self, id: &str, root_folder_id: &str) -> Result<()> {
+        let conn = self.pool.get()?;
+        let now = chrono::Utc::now().timestamp();
+
+        conn.execute(
+            "UPDATE accounts SET root_folder_id = ?1, updated_at = ?2 WHERE id = ?3",
+            params![root_folder_id, now, id],
+        )
+        .map_err(|e| CirrusError::Database(format!("Failed to update root_folder_id: {}", e)))?;
+
+        Ok(())
+    }
+
     pub fn delete_account(&self, id: &str) -> Result<()> {
         let conn = self.pool.get()?;
+        let _ = conn.execute("DELETE FROM entries WHERE account_id = ?1", params![id]);
         conn.execute("DELETE FROM accounts WHERE id = ?1", params![id])
             .map_err(|e| CirrusError::Database(format!("Delete account failed: {}", e)))?;
         Ok(())

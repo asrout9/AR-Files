@@ -77,6 +77,13 @@ impl SyncEngine {
                     .await
                 {
                     Ok((children, next_token)) => {
+                        if pid_ref.is_none() {
+                            if let Some(first) = children.first() {
+                                if let Some(ref r_id) = first.parent_id {
+                                    let _ = self.accounts_repo.update_root_folder_id(&self.account_id, r_id);
+                                }
+                            }
+                        }
                         for child in children {
                             if child.is_directory {
                                 queue.push_back(Some(child.id.clone()));

@@ -9,7 +9,7 @@ use cirrus_db::{
 };
 use cirrus_ops::OperationsManager;
 use cirrus_platform::{DesktopEntryManager, HangProofFs, ThumbnailManager, TrashManager};
-use cirrus_providers::{CloudProvider, CredentialsManager, MockCloudProvider};
+use cirrus_providers::{CloudProvider, CredentialsManager, GenericCloudConfig, MockCloudProvider};
 use cirrus_sync::{
     BandwidthLimiter, CacheManager, HydrationManager, SyncEngine, UploadQueueManager,
 };
@@ -77,30 +77,12 @@ impl AppState {
         let upload_queues_map: HashMap<String, Arc<UploadQueueManager>> = HashMap::new();
         let upload_queues = Arc::new(RwLock::new(upload_queues_map));
 
-        // Default initial provider for fallback hydration
+        // Default initial fallback provider for hydration manager when no cloud account is connected
         let default_provider: Arc<dyn CloudProvider> = Arc::new(MockCloudProvider::new(
-            "acc_gdrive",
-            "Google Drive",
-            15 * 1024 * 1024 * 1024,
+            "fallback",
+            "None",
+            0,
         ));
-        providers
-            .write()
-            .insert("acc_gdrive".to_string(), default_provider.clone());
-
-        let default_engine = Arc::new(SyncEngine::new(
-            "acc_gdrive",
-            default_provider.clone(),
-            accounts_repo.clone(),
-            entries_repo.clone(),
-        ));
-        sync_engines
-            .write()
-            .insert("acc_gdrive".to_string(), default_engine);
-
-        let default_upload = Arc::new(UploadQueueManager::new("acc_gdrive", entries_repo.clone()));
-        upload_queues
-            .write()
-            .insert("acc_gdrive".to_string(), default_upload);
 
         let hydration_mgr = Arc::new(HydrationManager::new(
             &cache_dir,
@@ -109,7 +91,7 @@ impl AppState {
             4,
         )?);
 
-        Ok(Self {
+        let this = Self {
             db_pool,
             accounts_repo,
             entries_repo,
@@ -130,7 +112,54 @@ impl AppState {
             upload_queues,
             hydration_mgr,
             mount_mgr,
-        })
+        };
+
+        this.restore_registered_accounts();
+
+        Ok(this)
+    }
+
+    /// Restore registered accounts from the database upon startup
+    pub fn restore_registered_accounts(&self) {
+        if let Ok(accounts) = self.accounts_repo.list_accounts() {
+            for acc in accounts {
+                match acc.provider_type {
+                    cirrus_core::account::ProviderType::GoogleDrive => {
+                        let provider = Arc::new(cirrus_providers::GoogleDriveProvider::new(
+                            &acc.id,
+                            &acc.name,
+                            self.credentials_mgr.clone(),
+                        ));
+                        self.register_cloud_account(&acc.id, provider);
+                    }
+                    cirrus_core::account::ProviderType::OneDrive => {
+                        let provider = Arc::new(cirrus_providers::OneDriveProvider::new(
+                            &acc.id,
+                            &acc.name,
+                            self.credentials_mgr.clone(),
+                        ));
+                        self.register_cloud_account(&acc.id, provider);
+                    }
+                    cirrus_core::account::ProviderType::WebDAV
+                    | cirrus_core::account::ProviderType::Nextcloud
+                    | cirrus_core::account::ProviderType::S3 => {
+                        if let Ok(Some(config)) = self
+                            .settings_repo
+                            .get_json::<GenericCloudConfig>(&format!("generic_config:{}", acc.id))
+                        {
+                            let provider = Arc::new(cirrus_providers::GenericCloudProvider::new(
+                                &acc.id,
+                                &acc.name,
+                                config,
+                                self.credentials_mgr.clone(),
+                            ));
+                            self.register_cloud_account(&acc.id, provider);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 
     /// Helper to register a newly connected cloud provider account into active memory

@@ -60,6 +60,28 @@ pub async fn create_folder(
     parent_id: Option<String>,
     name: String,
 ) -> Result<EntryRecord> {
+    if account_id == "acc_local" || parent_id.as_deref().map_or(false, |p| p.starts_with('/')) {
+        let parent = parent_id.unwrap_or_else(|| {
+            std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
+        });
+        let new_dir_path = std::path::Path::new(&parent).join(&name);
+        std::fs::create_dir_all(&new_dir_path).map_err(|e| {
+            cirrus_core::error::CirrusError::Io(format!("Failed to create folder: {}", e))
+        })?;
+        let meta = state.hangproof_fs.stat_hangproof(&new_dir_path).await?;
+        let record = meta.to_entry_record("acc_local", Some(parent), "local");
+        return Ok(record);
+    }
+
+    let provider_opt = state.providers.read().get(&account_id).cloned();
+    if let Some(provider) = provider_opt {
+        let remote_parent = parent_id.as_deref();
+        if let Ok(remote_rec) = provider.create_folder(remote_parent, &name).await {
+            let _ = state.entries_repo.upsert_entry(&remote_rec);
+            return Ok(remote_rec);
+        }
+    }
+
     state
         .ops_mgr
         .create_folder(&account_id, parent_id.as_deref(), &name)
@@ -67,6 +89,39 @@ pub async fn create_folder(
 }
 
 pub async fn rename_entry(state: &AppState, id: String, new_name: String) -> Result<EntryRecord> {
+    if id.starts_with('/') || std::path::Path::new(&id).is_absolute() || std::path::Path::new(&id).exists() {
+        let old_path = std::path::Path::new(&id);
+        if !old_path.exists() {
+            return Err(cirrus_core::error::CirrusError::NotFound {
+                entity: "Local File".to_string(),
+                id: id.clone(),
+            });
+        }
+        let parent = old_path.parent().unwrap_or_else(|| std::path::Path::new("/"));
+        let new_path = parent.join(&new_name);
+        std::fs::rename(old_path, &new_path).map_err(|e| {
+            cirrus_core::error::CirrusError::Io(format!(
+                "Failed to rename '{}' -> '{}': {}",
+                id,
+                new_path.display(),
+                e
+            ))
+        })?;
+
+        let meta = state.hangproof_fs.stat_hangproof(&new_path).await?;
+        let parent_str = parent.to_string_lossy().to_string();
+        let record = meta.to_entry_record("acc_local", Some(parent_str), "local");
+        return Ok(record);
+    }
+
+    if let Ok(Some(entry)) = state.entries_repo.get_entry(&id) {
+        let provider_opt = state.providers.read().get(&entry.account_id).cloned();
+        if let Some(provider) = provider_opt {
+            let remote_id = entry.remote_id.as_deref().unwrap_or(&id);
+            let _ = provider.rename(remote_id, &new_name).await;
+        }
+    }
+
     state.ops_mgr.rename_entry(&id, &new_name).await
 }
 
@@ -94,6 +149,45 @@ pub async fn copy_entries(
 }
 
 pub async fn trash_entries(state: &AppState, entry_ids: Vec<String>) -> Result<()> {
+    for id in &entry_ids {
+        if id.starts_with('/') || std::path::Path::new(id).is_absolute() || std::path::Path::new(id).exists() {
+            let path = std::path::Path::new(id);
+            if path.exists() {
+                if let Err(e) = state.trash_mgr.move_to_trash(path) {
+                    tracing::warn!("trash_mgr failed to trash local path '{}': {}. Falling back to removal.", id, e);
+                    if path.is_dir() {
+                        let _ = std::fs::remove_dir_all(path);
+                    } else {
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
+            }
+        } else {
+            if let Ok(Some(entry)) = state.entries_repo.get_entry(id) {
+                if let Some(ref local) = entry.local_path {
+                    let p = std::path::Path::new(local);
+                    if p.exists() {
+                        let _ = std::fs::remove_file(p);
+                    }
+                }
+                let content_cache = state.cache_dir.join("content").join(id);
+                if content_cache.exists() {
+                    let _ = std::fs::remove_file(content_cache);
+                }
+
+                let provider_opt = state.providers.read().get(&entry.account_id).cloned();
+                if let Some(provider) = provider_opt {
+                    let remote_id = entry.remote_id.as_deref().unwrap_or(id);
+                    if let Err(e) = provider.delete_entry(remote_id, false).await {
+                        tracing::warn!("Failed to trash entry on provider: {}", e);
+                    }
+                }
+
+                let _ = state.entries_repo.delete_entry(id);
+            }
+        }
+    }
+
     state.ops_mgr.trash_entries(&entry_ids).await
 }
 
@@ -108,6 +202,42 @@ pub async fn redo_last_operation(state: &AppState) -> Result<()> {
 }
 
 pub async fn delete_permanently(state: &AppState, entry_ids: Vec<String>) -> Result<()> {
+    for id in &entry_ids {
+        if id.starts_with('/') || std::path::Path::new(id).is_absolute() || std::path::Path::new(id).exists() {
+            let path = std::path::Path::new(id);
+            if path.exists() {
+                if path.is_dir() {
+                    let _ = std::fs::remove_dir_all(path);
+                } else {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        } else {
+            if let Ok(Some(entry)) = state.entries_repo.get_entry(id) {
+                if let Some(ref local) = entry.local_path {
+                    let p = std::path::Path::new(local);
+                    if p.exists() {
+                        let _ = std::fs::remove_file(p);
+                    }
+                }
+                let content_cache = state.cache_dir.join("content").join(id);
+                if content_cache.exists() {
+                    let _ = std::fs::remove_file(content_cache);
+                }
+
+                let provider_opt = state.providers.read().get(&entry.account_id).cloned();
+                if let Some(provider) = provider_opt {
+                    let remote_id = entry.remote_id.as_deref().unwrap_or(id);
+                    if let Err(e) = provider.delete_entry(remote_id, true).await {
+                        tracing::warn!("Failed to permanently delete entry on provider: {}", e);
+                    }
+                }
+
+                let _ = state.entries_repo.delete_entry(id);
+            }
+        }
+    }
+
     state.ops_mgr.delete_permanently(&entry_ids).await
 }
 
@@ -123,7 +253,33 @@ pub async fn apply_batch_rename(
     state: &AppState,
     previews: Vec<cirrus_ops::BatchRenamePreview>,
 ) -> Result<Vec<EntryRecord>> {
-    state.ops_mgr.apply_batch_rename(&previews).await
+    let mut updated = Vec::new();
+    let mut cloud_previews = Vec::new();
+
+    for prev in previews {
+        if prev.entry_id.starts_with('/') || std::path::Path::new(&prev.entry_id).is_absolute() || std::path::Path::new(&prev.entry_id).exists() {
+            let old_path = std::path::Path::new(&prev.entry_id);
+            if old_path.exists() {
+                let parent = old_path.parent().unwrap_or_else(|| std::path::Path::new("/"));
+                let new_path = parent.join(&prev.new_name);
+                if std::fs::rename(old_path, &new_path).is_ok() {
+                    if let Ok(meta) = state.hangproof_fs.stat_hangproof(&new_path).await {
+                        let rec = meta.to_entry_record("acc_local", Some(parent.to_string_lossy().to_string()), "local");
+                        updated.push(rec);
+                    }
+                }
+            }
+        } else {
+            cloud_previews.push(prev);
+        }
+    }
+
+    if !cloud_previews.is_empty() {
+        let cloud_updated = state.ops_mgr.apply_batch_rename(&cloud_previews).await?;
+        updated.extend(cloud_updated);
+    }
+
+    Ok(updated)
 }
 
 pub async fn compress_entries(source_paths: Vec<String>, output_path: String) -> Result<()> {
@@ -255,39 +411,120 @@ pub async fn cancel_hydration(state: &AppState, entry_id: String) -> Result<()> 
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GoogleAuthParams {
+    pub account_name: Option<String>,
+    pub access_token: Option<String>,
+    pub refresh_token: Option<String>,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OneDriveAuthParams {
+    pub name: String,
+    pub email: Option<String>,
+    pub token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenericAccountParams {
+    pub name: String,
+    pub config: Option<cirrus_providers::GenericCloudConfig>,
+    pub provider_type: Option<String>,
+    pub endpoint: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub bucket: Option<String>,
+}
+
 pub async fn start_google_oauth(
     state: &AppState,
-    account_name: Option<String>,
+    params: GoogleAuthParams,
 ) -> Result<AccountRecord> {
     let acc_id = format!("acc_gdrive_{}", &uuid::Uuid::new_v4().to_string()[..8]);
-    let name = account_name.unwrap_or_else(|| "Google Drive".to_string());
+    let name = params.account_name.clone().unwrap_or_else(|| "Google Drive".to_string());
 
-    let oauth_flow = cirrus_providers::GoogleOAuthFlow::new(state.credentials_mgr.clone());
-    let _token_resp = oauth_flow.execute_flow(&acc_id).await?;
+    let (gdrive_provider, _oauth_flow_opt) = if let Some(ref token) = params.access_token {
+        let trimmed = token.trim();
+        if !trimmed.is_empty() {
+            let access_key = cirrus_providers::CredentialsManager::access_token_key(&acc_id);
+            state.credentials_mgr.store_secret(&access_key, trimmed)?;
+            if let Some(ref rtok) = params.refresh_token {
+                if !rtok.trim().is_empty() {
+                    let ref_key = cirrus_providers::CredentialsManager::refresh_token_key(&acc_id);
+                    state.credentials_mgr.store_secret(&ref_key, rtok.trim())?;
+                }
+            }
+            let provider = Arc::new(cirrus_providers::GoogleDriveProvider::new(
+                &acc_id,
+                &name,
+                state.credentials_mgr.clone(),
+            ));
+            (provider, None)
+        } else {
+            return Err(cirrus_core::error::CirrusError::Authentication(
+                "Access token cannot be empty. Please paste a valid Google OAuth Access Token.".to_string(),
+            ));
+        }
+    } else {
+        // System Browser Flow requires a real registered OAuth Client ID
+        let client_id_opt = params
+            .client_id
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| state.settings_repo.get_string("google_client_id").ok().flatten())
+            .or_else(|| std::env::var("GOOGLE_DRIVE_CLIENT_ID").ok());
 
-    let gdrive_provider = Arc::new(cirrus_providers::GoogleDriveProvider::new(
-        &acc_id,
-        &name,
-        state.credentials_mgr.clone(),
-    ));
+        let client_secret_opt = params
+            .client_secret
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| state.settings_repo.get_string("google_client_secret").ok().flatten())
+            .or_else(|| std::env::var("GOOGLE_DRIVE_CLIENT_SECRET").ok());
 
-    // Fetch initial quota
-    let quota = gdrive_provider
-        .quota()
+        let (cid, csec) = match client_id_opt {
+            Some(ref c) if !c.trim().is_empty() && !c.contains("arfilesdesktopclientfedora") => {
+                let _ = state.settings_repo.set_string("google_client_id", c.trim());
+                if let Some(ref sec) = client_secret_opt {
+                    let _ = state.settings_repo.set_string("google_client_secret", sec.trim());
+                }
+                (c.trim().to_string(), client_secret_opt)
+            }
+            _ => (
+                cirrus_providers::DEFAULT_GOOGLE_CLIENT_ID.to_string(),
+                Some(cirrus_providers::DEFAULT_GOOGLE_CLIENT_SECRET.to_string()),
+            ),
+        };
+
+        let oauth_flow = Arc::new(cirrus_providers::GoogleOAuthFlow::with_client(
+            cid,
+            csec,
+            state.credentials_mgr.clone(),
+        ));
+        oauth_flow.execute_flow(&acc_id).await?;
+
+        let provider = Arc::new(cirrus_providers::GoogleDriveProvider::with_oauth_flow(
+            &acc_id,
+            &name,
+            oauth_flow.clone(),
+            state.credentials_mgr.clone(),
+        ));
+        (provider, Some(oauth_flow))
+    };
+
+    // Live API call: Fetch real account info and storage quota from Google Drive API
+    let (detected_email, quota) = gdrive_provider.fetch_about().await?;
+    let root_folder_id = gdrive_provider
+        .fetch_root_id()
         .await
-        .unwrap_or(cirrus_providers::ProviderQuota {
-            total_bytes: 15 * 1024 * 1024 * 1024,
-            used_bytes: 0,
-            trash_bytes: None,
-        });
+        .unwrap_or_else(|_| "root".to_string());
 
     let now = chrono::Utc::now().timestamp();
     let account = AccountRecord {
         id: acc_id.clone(),
         provider_type: cirrus_core::account::ProviderType::GoogleDrive,
         name: name.clone(),
-        email: None,
-        root_folder_id: Some("root".to_string()),
+        email: detected_email.or(params.account_name),
+        root_folder_id: Some(root_folder_id),
         quota_total: Some(quota.total_bytes),
         quota_used: Some(quota.used_bytes),
         sync_status: cirrus_core::account::AccountSyncStatus::Indexing,
@@ -300,15 +537,187 @@ pub async fn start_google_oauth(
     state.accounts_repo.upsert_account(&account)?;
     state.register_cloud_account(&acc_id, gdrive_provider.clone());
 
-    // Spawn background initial scan
+    // Spawn background initial scan to crawl real Google Drive files into metadata.db
     let engine_opt = state.sync_engines.read().get(&acc_id).cloned();
+    let acc_id_clone = acc_id.clone();
     if let Some(engine) = engine_opt {
         tokio::spawn(async move {
-            let _ = engine.run_initial_scan(None).await;
+            tracing::info!("Starting background scan for Google Drive '{}'...", acc_id_clone);
+            if let Err(e) = engine.run_initial_scan(None).await {
+                tracing::error!("Background scan error for {}: {}", acc_id_clone, e);
+            }
         });
     }
 
     Ok(account)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateCredentialsParams {
+    pub account_id: String,
+    pub token: String,
+    pub refresh_token: Option<String>,
+}
+
+pub async fn update_account_credentials(
+    state: &AppState,
+    params: UpdateCredentialsParams,
+) -> Result<()> {
+    if params.token.trim() == "browser" {
+        let account = state
+            .accounts_repo
+            .get_account(&params.account_id)?
+            .ok_or_else(|| {
+                cirrus_core::error::CirrusError::NotFound {
+                    entity: "Account".to_string(),
+                    id: params.account_id.clone(),
+                }
+            })?;
+
+        match account.provider_type {
+            cirrus_core::account::ProviderType::GoogleDrive => {
+                let (cid, csec) = match state.settings_repo.get_string("google_client_id").ok().flatten() {
+                    Some(ref c) if !c.trim().is_empty() && !c.contains("arfilesdesktopclientfedora") => {
+                        let sec = state.settings_repo.get_string("google_client_secret").ok().flatten();
+                        (c.trim().to_string(), sec)
+                    }
+                    _ => (
+                        cirrus_providers::DEFAULT_GOOGLE_CLIENT_ID.to_string(),
+                        Some(cirrus_providers::DEFAULT_GOOGLE_CLIENT_SECRET.to_string()),
+                    ),
+                };
+
+                let oauth_flow = Arc::new(cirrus_providers::GoogleOAuthFlow::with_client(
+                    cid,
+                    csec,
+                    state.credentials_mgr.clone(),
+                ));
+                oauth_flow.execute_flow(&params.account_id).await?;
+
+                state.accounts_repo.update_sync_status(
+                    &params.account_id,
+                    cirrus_core::account::AccountSyncStatus::Idle,
+                    None,
+                )?;
+
+                let _ = state.entries_repo.reset_error_entries_for_account(&params.account_id);
+
+                let provider = Arc::new(cirrus_providers::GoogleDriveProvider::with_oauth_flow(
+                    &account.id,
+                    &account.name,
+                    oauth_flow,
+                    state.credentials_mgr.clone(),
+                ));
+                state.register_cloud_account(&account.id, provider);
+            }
+            cirrus_core::account::ProviderType::OneDrive => {
+                let client_id = state
+                    .settings_repo
+                    .get_string("onedrive_client_id")
+                    .ok()
+                    .flatten()
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| cirrus_providers::DEFAULT_ONEDRIVE_CLIENT_ID.to_string());
+
+                let client_secret = state
+                    .settings_repo
+                    .get_string("onedrive_client_secret")
+                    .ok()
+                    .flatten()
+                    .filter(|s| !s.trim().is_empty())
+                    .or_else(|| Some(cirrus_providers::DEFAULT_ONEDRIVE_CLIENT_SECRET.to_string()));
+
+                let oauth_flow = Arc::new(cirrus_providers::OneDriveOAuthFlow::with_client(
+                    client_id,
+                    client_secret,
+                    state.credentials_mgr.clone(),
+                ));
+                oauth_flow.execute_flow(&params.account_id).await?;
+
+                state.accounts_repo.update_sync_status(
+                    &params.account_id,
+                    cirrus_core::account::AccountSyncStatus::Idle,
+                    None,
+                )?;
+
+                let _ = state.entries_repo.reset_error_entries_for_account(&params.account_id);
+
+                let provider = Arc::new(cirrus_providers::OneDriveProvider::with_oauth_flow(
+                    &account.id,
+                    &account.name,
+                    oauth_flow,
+                    state.credentials_mgr.clone(),
+                ));
+                state.register_cloud_account(&account.id, provider);
+            }
+            _ => {
+                return Err(cirrus_core::error::CirrusError::Validation(
+                    "Browser OAuth is only supported for Google Drive and Microsoft OneDrive".to_string(),
+                ));
+            }
+        }
+
+        return Ok(());
+    }
+
+    let raw_token = params.token.trim();
+    let token_clean = raw_token
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim_start_matches("Bearer ")
+        .trim_start_matches("bearer ")
+        .trim()
+        .to_string();
+
+    if token_clean.is_empty() {
+        return Err(cirrus_core::error::CirrusError::Validation("Access token cannot be empty".to_string()));
+    }
+
+    let access_key = cirrus_providers::CredentialsManager::access_token_key(&params.account_id);
+    state.credentials_mgr.store_secret(&access_key, &token_clean)?;
+
+    if let Some(ref r_token) = params.refresh_token {
+        let clean_ref = r_token.trim().trim_matches('"').trim_matches('\'').trim();
+        if !clean_ref.is_empty() {
+            let ref_key = cirrus_providers::CredentialsManager::refresh_token_key(&params.account_id);
+            state.credentials_mgr.store_secret(&ref_key, clean_ref)?;
+        }
+    }
+
+    // Reset account sync status to Idle in DB
+    state.accounts_repo.update_sync_status(
+        &params.account_id,
+        cirrus_core::account::AccountSyncStatus::Idle,
+        None,
+    )?;
+
+    // Reset any error files for this account back to CloudOnly
+    let _ = state.entries_repo.reset_error_entries_for_account(&params.account_id);
+
+    // Re-register provider
+    if let Some(account) = state.accounts_repo.get_account(&params.account_id)? {
+        match account.provider_type {
+            cirrus_core::account::ProviderType::GoogleDrive => {
+                let provider = Arc::new(cirrus_providers::GoogleDriveProvider::new(
+                    &account.id,
+                    &account.name,
+                    state.credentials_mgr.clone(),
+                ));
+                state.register_cloud_account(&account.id, provider);
+            }
+            cirrus_core::account::ProviderType::OneDrive => {
+                let provider = Arc::new(cirrus_providers::OneDriveProvider::new(
+                    &account.id,
+                    &account.name,
+                    state.credentials_mgr.clone(),
+                ));
+                state.register_cloud_account(&account.id, provider);
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
 }
 
 pub async fn get_account_quota(
@@ -583,24 +992,89 @@ pub async fn generate_thumbnail(state: &AppState, path: String) -> Result<Option
     Ok(None)
 }
 
-pub async fn add_onedrive_account(state: &AppState, name: String) -> Result<AccountRecord> {
+pub async fn add_onedrive_account(
+    state: &AppState,
+    params: OneDriveAuthParams,
+) -> Result<AccountRecord> {
     let acc_id = format!("acc_onedrive_{}", &uuid::Uuid::new_v4().to_string()[..8]);
-    let provider = Arc::new(cirrus_providers::OneDriveProvider::new(
-        &acc_id,
-        &name,
-        state.credentials_mgr.clone(),
-    ));
+    let name = if params.name.trim().is_empty() {
+        "OneDrive".to_string()
+    } else {
+        params.name.trim().to_string()
+    };
+
+    let raw_token = params.token.as_deref().unwrap_or("").trim();
+    let is_browser = raw_token.is_empty() || raw_token == "browser";
+
+    let provider = if is_browser {
+        let client_id = state
+            .settings_repo
+            .get_string("onedrive_client_id")
+            .ok()
+            .flatten()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| cirrus_providers::DEFAULT_ONEDRIVE_CLIENT_ID.to_string());
+
+        let client_secret = state
+            .settings_repo
+            .get_string("onedrive_client_secret")
+            .ok()
+            .flatten()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| Some(cirrus_providers::DEFAULT_ONEDRIVE_CLIENT_SECRET.to_string()));
+
+        let oauth_flow = Arc::new(cirrus_providers::OneDriveOAuthFlow::with_client(
+            client_id,
+            client_secret,
+            state.credentials_mgr.clone(),
+        ));
+        oauth_flow.execute_flow(&acc_id).await?;
+
+        Arc::new(cirrus_providers::OneDriveProvider::with_oauth_flow(
+            &acc_id,
+            &name,
+            oauth_flow,
+            state.credentials_mgr.clone(),
+        ))
+    } else {
+        let token_clean = raw_token
+            .trim_matches('"')
+            .trim_matches('\'')
+            .trim_start_matches("Bearer ")
+            .trim_start_matches("bearer ")
+            .trim()
+            .to_string();
+
+        if token_clean.is_empty() {
+            return Err(cirrus_core::error::CirrusError::AuthRequired {
+                account_id: "onedrive".to_string(),
+                reason: "Microsoft Graph Access Token is required to connect OneDrive. Please enter your OAuth token.".to_string(),
+            });
+        }
+
+        let key = cirrus_providers::CredentialsManager::access_token_key(&acc_id);
+        state.credentials_mgr.store_secret(&key, &token_clean)?;
+
+        Arc::new(cirrus_providers::OneDriveProvider::new(
+            &acc_id,
+            &name,
+            state.credentials_mgr.clone(),
+        ))
+    };
+
+    // Live API call: verify access token against Microsoft Graph and fetch real profile, root ID & quota
+    let (detected_email, root_folder_id, quota) = provider.fetch_about().await?;
 
     let now = chrono::Utc::now().timestamp();
     let account = AccountRecord {
         id: acc_id.clone(),
         provider_type: cirrus_core::account::ProviderType::OneDrive,
         name: name.clone(),
-        email: None,
-        root_folder_id: Some("root".to_string()),
-        quota_total: Some(1024 * 1024 * 1024 * 1024), // 1 TB
-        quota_used: Some(0),
-        sync_status: cirrus_core::account::AccountSyncStatus::Idle,
+        email: detected_email.or(params.email),
+        root_folder_id: Some(root_folder_id),
+        quota_total: Some(quota.total_bytes),
+        quota_used: Some(quota.used_bytes),
+        sync_status: cirrus_core::account::AccountSyncStatus::Indexing,
         delta_token: None,
         mount_path: None,
         created_at: now,
@@ -609,40 +1083,102 @@ pub async fn add_onedrive_account(state: &AppState, name: String) -> Result<Acco
 
     state.accounts_repo.upsert_account(&account)?;
     state.register_cloud_account(&acc_id, provider);
+
+    let engine_opt = state.sync_engines.read().get(&acc_id).cloned();
+    let acc_id_clone = acc_id.clone();
+    if let Some(engine) = engine_opt {
+        tokio::spawn(async move {
+            tracing::info!("Starting background scan for OneDrive '{}'...", acc_id_clone);
+            if let Err(e) = engine.run_initial_scan(None).await {
+                tracing::error!("Background scan error for OneDrive {}: {}", acc_id_clone, e);
+            }
+        });
+    }
+
     Ok(account)
 }
 
 pub async fn add_generic_account(
     state: &AppState,
-    name: String,
-    config: cirrus_providers::GenericCloudConfig,
+    params: GenericAccountParams,
 ) -> Result<AccountRecord> {
-    let acc_id = format!("acc_generic_{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let (config, password) = if let Some(c) = params.config {
+        (c, params.password)
+    } else {
+        let proto = params.provider_type.unwrap_or_else(|| "webdav".to_string());
+        let endp = params.endpoint.unwrap_or_default();
+        let base_p = params.bucket.unwrap_or_else(|| "/".to_string());
+        (
+            cirrus_providers::GenericCloudConfig {
+                endpoint_url: endp,
+                protocol: proto,
+                username: params.username,
+                base_path: base_p,
+            },
+            params.password,
+        )
+    };
+
+    let prefix = match config.protocol.to_lowercase().as_str() {
+        "nextcloud" => "nextcloud",
+        "s3" => "s3",
+        _ => "webdav",
+    };
+    let acc_id = format!("acc_{}_{}", prefix, &uuid::Uuid::new_v4().to_string()[..8]);
+
+    if let Some(ref pass) = password {
+        let key = cirrus_providers::CredentialsManager::refresh_token_key(&acc_id);
+        state.credentials_mgr.store_secret(&key, pass)?;
+    }
+
     let provider = Arc::new(cirrus_providers::GenericCloudProvider::new(
         &acc_id,
-        &name,
-        config,
+        &params.name,
+        config.clone(),
         state.credentials_mgr.clone(),
     ));
+
+    // Test connection immediately against remote server
+    let _ = provider.list_children(None, None).await?;
+
+    let quota = provider.quota().await.unwrap_or(cirrus_providers::ProviderQuota {
+        total_bytes: 100 * 1024 * 1024 * 1024,
+        used_bytes: 0,
+        trash_bytes: None,
+    });
 
     let now = chrono::Utc::now().timestamp();
     let account = AccountRecord {
         id: acc_id.clone(),
         provider_type: provider.provider_type(),
-        name: name.clone(),
-        email: None,
+        name: params.name.clone(),
+        email: config.username.clone(),
         root_folder_id: None,
-        quota_total: Some(100 * 1024 * 1024 * 1024),
-        quota_used: Some(0),
-        sync_status: cirrus_core::account::AccountSyncStatus::Idle,
+        quota_total: Some(quota.total_bytes),
+        quota_used: Some(quota.used_bytes),
+        sync_status: cirrus_core::account::AccountSyncStatus::Indexing,
         delta_token: None,
         mount_path: None,
         created_at: now,
         updated_at: now,
     };
 
+    let _ = state.settings_repo.set_json(&format!("generic_config:{}", acc_id), &config);
     state.accounts_repo.upsert_account(&account)?;
-    state.register_cloud_account(&acc_id, provider);
+    state.register_cloud_account(&acc_id, provider.clone());
+
+    // Spawn real background initial scan to populate real files into metadata.db
+    let engine_opt = state.sync_engines.read().get(&acc_id).cloned();
+    let acc_id_clone = acc_id.clone();
+    if let Some(engine) = engine_opt {
+        tokio::spawn(async move {
+            tracing::info!("Starting background scan for generic account '{}'...", acc_id_clone);
+            if let Err(e) = engine.run_initial_scan(None).await {
+                tracing::error!("Background scan error for {}: {}", acc_id_clone, e);
+            }
+        });
+    }
+
     Ok(account)
 }
 
@@ -730,4 +1266,100 @@ pub async fn set_as_default_file_manager(state: &AppState) -> Result<bool> {
         .write()
         .register_as_default_file_manager()?;
     Ok(true)
+}
+
+pub async fn remove_account(state: &AppState, account_id: String) -> Result<()> {
+    let _ = state.mount_mgr.unmount_account(&account_id);
+    state.providers.write().remove(&account_id);
+    state.sync_engines.write().remove(&account_id);
+    state.upload_queues.write().remove(&account_id);
+    state.accounts_repo.delete_account(&account_id)?;
+    let _ = state.entries_repo.delete_entries_for_account(&account_id);
+    let _ = state.settings_repo.set_string(&format!("generic_config:{}", account_id), "");
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudThumbnailParams {
+    pub account_id: String,
+    pub entry_id: String,
+    #[serde(default)]
+    pub thumbnail_url: Option<String>,
+}
+
+pub async fn get_cloud_thumbnail(
+    state: &AppState,
+    params: CloudThumbnailParams,
+) -> Result<Option<String>> {
+    let cloud_thumb_dir = state.cache_dir.join("cloud-thumbnails").join(&params.account_id);
+    let _ = tokio::fs::create_dir_all(&cloud_thumb_dir).await;
+
+    let safe_id = params
+        .entry_id
+        .replace(['/', '\\', ':', '?', '*', '"', '<', '>', '|'], "_");
+    let cached_file = cloud_thumb_dir.join(format!("{}.png", safe_id));
+
+    if cached_file.exists() {
+        return Ok(Some(format!("file://{}", cached_file.to_string_lossy())));
+    }
+
+    // Determine the remote URL to fetch
+    let mut remote_url = params.thumbnail_url.unwrap_or_default();
+    if remote_url.is_empty() {
+        if let Ok(Some(entry)) = state.entries_repo.get_entry(&params.entry_id) {
+            if let Some(t_url) = entry.thumbnail_url {
+                remote_url = t_url;
+            }
+        }
+    }
+
+    if remote_url.is_empty() {
+        // Try fetching fresh metadata from provider if available
+        let provider_opt = state.providers.read().get(&params.account_id).cloned();
+        if let Some(provider) = provider_opt {
+            if let Ok(fresh_entry) = provider.get_metadata(&params.entry_id).await {
+                let _ = state.entries_repo.upsert_entry(&fresh_entry);
+                if let Some(t_url) = fresh_entry.thumbnail_url {
+                    remote_url = t_url;
+                }
+            }
+        }
+    }
+
+    if remote_url.is_empty() {
+        return Ok(None);
+    }
+
+    // Attempt to download thumbnail using authenticated provider
+    let provider_opt = state.providers.read().get(&params.account_id).cloned();
+    if let Some(provider) = provider_opt {
+        if let Ok(bytes) = provider.fetch_thumbnail_bytes(&remote_url).await {
+            if !bytes.is_empty() {
+                if tokio::fs::write(&cached_file, &bytes).await.is_ok() {
+                    return Ok(Some(format!("file://{}", cached_file.to_string_lossy())));
+                }
+            }
+        }
+    }
+
+    // Direct reqwest fallback if provider fetch wasn't needed or available
+    if remote_url.starts_with("http://") || remote_url.starts_with("https://") {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_default();
+        if let Ok(resp) = client.get(&remote_url).send().await {
+            if resp.status().is_success() {
+                if let Ok(bytes) = resp.bytes().await {
+                    if !bytes.is_empty() {
+                        if tokio::fs::write(&cached_file, &bytes).await.is_ok() {
+                            return Ok(Some(format!("file://{}", cached_file.to_string_lossy())));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(None)
 }

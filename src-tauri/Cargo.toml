@@ -21,6 +21,7 @@ tracing-subscriber.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 parking_lot.workspace = true
+reqwest.workspace = true
 
 [[bin]]
 name = "ar-files"

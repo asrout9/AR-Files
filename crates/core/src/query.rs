@@ -2,9 +2,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::entry::EntryId;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SortField {
+    #[default]
     Name,
     Size,
     Modified,
@@ -13,14 +14,16 @@ pub enum SortField {
     State,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SortDirection {
+    #[default]
     Asc,
     Desc,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct FolderListingQuery {
     pub parent_id: Option<EntryId>,
     pub account_id: Option<String>,

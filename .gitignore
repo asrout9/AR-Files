@@ -9,6 +9,11 @@ dist/
 dist-ssr/
 *.local
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
 # Logs
 logs/
 *.log

@@ -79,4 +79,13 @@ pub trait CloudProvider: Send + Sync {
         let _ = id;
         Ok(Vec::new())
     }
+
+    /// Fetches thumbnail image bytes from a remote thumbnail URL (using provider auth if needed).
+    async fn fetch_thumbnail_bytes(&self, _url: &str) -> Result<Bytes> {
+        Err(cirrus_core::error::CirrusError::Provider {
+            provider: self.id().to_string(),
+            message: "Thumbnail fetching not supported".to_string(),
+            retry_after_secs: None,
+        })
+    }
 }

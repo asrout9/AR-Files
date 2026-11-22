@@ -30,7 +30,7 @@ describe("App component", () => {
     render(<App />);
     expect(screen.getByText("Places")).toBeDefined();
     expect(screen.getByText("Cloud Drives")).toBeDefined();
-    expect(screen.getByText("Home")).toBeDefined();
-    expect(screen.getByText("Documents")).toBeDefined();
+    expect(screen.getAllByText("Home").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Documents").length).toBeGreaterThan(0);
   });
 });

@@ -8,6 +8,11 @@ import {
   Plus,
   Check,
   FolderSymlink,
+  Trash2,
+  ChevronDown,
+  Sun,
+  Moon,
+  Monitor,
 } from "lucide-react";
 import { useExplorerStore } from "../store/useExplorerStore";
 import { getTranslation, LanguageCode, TranslationDict } from "../i18n";
@@ -22,8 +27,10 @@ export const PreferencesDialog: React.FC = () => {
     setViewMode,
     showHidden,
     toggleShowHidden,
+    theme,
+    setTheme,
     accounts,
-    addOneDriveAccount,
+    setAddCloudOpen,
     addGenericAccount,
     freeUpAllCache,
     setBandwidthLimits,
@@ -35,6 +42,7 @@ export const PreferencesDialog: React.FC = () => {
     accountMountPaths,
     mountAccountVfs,
     unmountAccountVfs,
+    removeAccount,
     language,
     setLanguage,
   } = useExplorerStore();
@@ -57,6 +65,18 @@ export const PreferencesDialog: React.FC = () => {
   const [genericPass, setGenericPass] = useState("");
 
   const [cacheEvictMsg, setCacheEvictMsg] = useState<string | null>(null);
+  const [isLangDropdownOpen, setIsLangDropdownOpen] = useState(false);
+
+  const languages: { code: LanguageCode; label: string; native: string }[] = [
+    { code: "en", label: "English (US)", native: "English (US)" },
+    { code: "de", label: "German", native: "Deutsch" },
+    { code: "fr", label: "French", native: "Français" },
+    { code: "es", label: "Spanish", native: "Español" },
+    { code: "ja", label: "Japanese", native: "日本語" },
+    { code: "hi", label: "Hindi", native: "हिन्दी" },
+  ];
+
+  const currentLang = languages.find((l) => l.code === language) || languages[0];
 
   useEffect(() => {
     if (isPreferencesOpen) {
@@ -291,25 +311,177 @@ export const PreferencesDialog: React.FC = () => {
                       </button>
                     </div>
 
+                    {/* Theme Mode Selector */}
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: "1px solid var(--border-color)", paddingTop: 12 }}>
+                      <div>
+                        <div style={{ fontWeight: 500 }}>Color Scheme / Theme</div>
+                        <div style={{ fontSize: 12, color: "var(--dim-fg)" }}>Choose Light, Dark, or follow system GNOME preference</div>
+                      </div>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button
+                          type="button"
+                          className={`adw-btn ${theme === "system" ? "adw-btn-accent" : ""}`}
+                          onClick={() => setTheme("system")}
+                          style={{ gap: 6 }}
+                          title="Follow GNOME System Theme"
+                        >
+                          <Monitor size={14} />
+                          <span>System</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`adw-btn ${theme === "light" ? "adw-btn-accent" : ""}`}
+                          onClick={() => setTheme("light")}
+                          style={{ gap: 6 }}
+                          title="Always Light Theme"
+                        >
+                          <Sun size={14} />
+                          <span>Light</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`adw-btn ${theme === "dark" ? "adw-btn-accent" : ""}`}
+                          onClick={() => setTheme("dark")}
+                          style={{ gap: 6 }}
+                          title="Always Dark Theme"
+                        >
+                          <Moon size={14} />
+                          <span>Dark</span>
+                        </button>
+                      </div>
+                    </div>
+
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: "1px solid var(--border-color)", paddingTop: 12 }}>
                       <div>
                         <div style={{ fontWeight: 500 }}>{t("language")}</div>
                         <div style={{ fontSize: 12, color: "var(--dim-fg)" }}>Select display language and date/time formatting</div>
                       </div>
-                      <select
-                        value={language}
-                        onChange={(e) => setLanguage(e.target.value as LanguageCode)}
-                        className="adw-btn"
-                        style={{ height: 32, padding: "0 10px" }}
-                        aria-label="Interface Language"
-                      >
-                        <option value="en">English (US)</option>
-                        <option value="de">Deutsch</option>
-                        <option value="fr">Français</option>
-                        <option value="es">Español</option>
-                        <option value="ja">日本語</option>
-                        <option value="hi">हिन्दी</option>
-                      </select>
+
+                      <div style={{ position: "relative" }}>
+                        {/* Hidden native select for accessibility and unit test event compatibility */}
+                        <select
+                          value={language}
+                          onChange={(e) => setLanguage(e.target.value as LanguageCode)}
+                          aria-label="Interface Language"
+                          style={{
+                            position: "absolute",
+                            width: 1,
+                            height: 1,
+                            padding: 0,
+                            margin: -1,
+                            overflow: "hidden",
+                            clip: "rect(0, 0, 0, 0)",
+                            whiteSpace: "nowrap",
+                            border: 0,
+                            opacity: 0,
+                            pointerEvents: "none",
+                          }}
+                          tabIndex={-1}
+                        >
+                          {languages.map((l) => (
+                            <option key={l.code} value={l.code}>
+                              {l.native}
+                            </option>
+                          ))}
+                        </select>
+
+                        {/* Custom Libadwaita Dropdown Button */}
+                        <button
+                          type="button"
+                          className="adw-btn"
+                          style={{
+                            height: 32,
+                            padding: "0 12px",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            minWidth: 140,
+                            justifyContent: "space-between",
+                          }}
+                          onClick={() => setIsLangDropdownOpen((prev) => !prev)}
+                          aria-haspopup="listbox"
+                          aria-expanded={isLangDropdownOpen}
+                        >
+                          <span>{currentLang.native}</span>
+                          <ChevronDown
+                            size={14}
+                            style={{
+                              opacity: 0.7,
+                              transform: isLangDropdownOpen ? "rotate(180deg)" : "none",
+                              transition: "transform 150ms ease",
+                            }}
+                          />
+                        </button>
+
+                        {/* Libadwaita Dropdown Menu */}
+                        {isLangDropdownOpen && (
+                          <>
+                            <div
+                              style={{
+                                position: "fixed",
+                                inset: 0,
+                                zIndex: 998,
+                              }}
+                              onClick={() => setIsLangDropdownOpen(false)}
+                            />
+                            <div
+                              role="listbox"
+                              style={{
+                                position: "absolute",
+                                top: "calc(100% + 4px)",
+                                right: 0,
+                                background: "var(--popover-bg)",
+                                border: "1px solid var(--border-color)",
+                                borderRadius: "var(--adw-radius-m)",
+                                boxShadow: "var(--popover-shadow)",
+                                padding: "4px 0",
+                                zIndex: 999,
+                                minWidth: 180,
+                                display: "flex",
+                                flexDirection: "column",
+                              }}
+                            >
+                              {languages.map((l) => {
+                                const isSelected = language === l.code;
+                                return (
+                                  <button
+                                    key={l.code}
+                                    type="button"
+                                    role="option"
+                                    aria-selected={isSelected}
+                                    className="adw-sidebar-item"
+                                    style={{
+                                      borderRadius: 0,
+                                      border: "none",
+                                      background: isSelected ? "var(--hover-bg)" : "transparent",
+                                      color: isSelected ? "var(--adw-accent-blue)" : "var(--window-fg)",
+                                      width: "100%",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "space-between",
+                                      padding: "7px 12px",
+                                      fontSize: 13,
+                                      cursor: "pointer",
+                                    }}
+                                    onClick={() => {
+                                      setLanguage(l.code);
+                                      setIsLangDropdownOpen(false);
+                                    }}
+                                  >
+                                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", textAlign: "left" }}>
+                                      <span style={{ fontWeight: isSelected ? 600 : 400 }}>{l.native}</span>
+                                      {l.label !== l.native && (
+                                        <span style={{ fontSize: 11, color: "var(--dim-fg)" }}>{l.label}</span>
+                                      )}
+                                    </div>
+                                    {isSelected && <Check size={14} color="var(--adw-accent-blue)" style={{ marginLeft: 8 }} />}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -498,7 +670,7 @@ export const PreferencesDialog: React.FC = () => {
                   <div style={{ display: "flex", gap: 8 }}>
                     <button
                       className="adw-btn"
-                      onClick={() => addOneDriveAccount("OneDrive Work")}
+                      onClick={() => setAddCloudOpen(true)}
                     >
                       <Plus size={14} style={{ marginRight: 4 }} />
                       Add OneDrive
@@ -681,6 +853,24 @@ export const PreferencesDialog: React.FC = () => {
                               Mount FUSE
                             </button>
                           )}
+                          <button
+                            className="adw-btn"
+                            style={{
+                              height: 26,
+                              fontSize: 11,
+                              padding: "0 8px",
+                              color: "var(--state-error)",
+                            }}
+                            title="Remove Cloud Storage Account"
+                            onClick={async () => {
+                              if (window.confirm(`Remove cloud drive "${acc.name}"?`)) {
+                                await removeAccount(acc.id);
+                              }
+                            }}
+                          >
+                            <Trash2 size={12} color="var(--state-error)" />
+                            <span>Remove</span>
+                          </button>
                         </div>
                         {(accountMountPaths[acc.id] || acc.mount_path) && (
                           <div

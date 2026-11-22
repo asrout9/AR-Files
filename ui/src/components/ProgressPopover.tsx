@@ -1,18 +1,8 @@
 import React from "react";
 import { Loader2, X, CheckCircle2 } from "lucide-react";
+import { ActiveJob } from "../types";
 
-export interface ActiveJob {
-  id: string;
-  type: string;
-  title: string;
-  itemsCompleted: number;
-  totalItems: number;
-  bytesProcessed: number;
-  totalBytes: number;
-  speedBps: number;
-  etaSeconds: number | null;
-  status: "running" | "completed" | "failed" | "cancelled";
-}
+export type { ActiveJob };
 
 interface ProgressPopoverProps {
   jobs: ActiveJob[];

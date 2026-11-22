@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { StateIcon } from "../src/components/StateIcon";
 import { Sidebar } from "../src/components/Sidebar";
 import { ContextMenu } from "../src/components/ContextMenu";
@@ -159,5 +159,42 @@ describe("Phase 3: Cloud Provider UI, State Icons, Quota & Offline Mode", () => 
     expect(screen.getByText("Free up space")).toBeDefined();
     fireEvent.click(screen.getByText("Free up space"));
     expect(handleClose).toHaveBeenCalled();
+  });
+
+  it("supports removing cloud storage via right-click context menu in Sidebar", async () => {
+    render(<Sidebar />);
+
+    const driveItem = screen.getByText("My Google Drive");
+    expect(driveItem).toBeDefined();
+
+    // Right click on cloud drive
+    fireEvent.contextMenu(driveItem, { clientX: 100, clientY: 200 });
+
+    // Verify context menu options appear
+    expect(screen.getByText("Open in New Tab")).toBeDefined();
+    expect(screen.getByText("Sync Now")).toBeDefined();
+    expect(screen.getByText("Work Offline")).toBeDefined();
+    const removeBtn = screen.getByText("Remove Drive");
+    expect(removeBtn).toBeDefined();
+
+    // Click Remove Drive to trigger confirmation dialog
+    fireEvent.click(removeBtn);
+
+    // Verify confirmation modal
+    expect(screen.getByText("Remove Cloud Drive")).toBeDefined();
+    expect(
+      screen.getByText(/Are you sure you want to remove/)
+    ).toBeDefined();
+
+    // Confirm removal
+    const confirmButtons = screen.getAllByRole("button", { name: "Remove Drive" });
+    const modalConfirmBtn = confirmButtons[confirmButtons.length - 1];
+    fireEvent.click(modalConfirmBtn);
+
+    // Verify account removed and active account reset to local
+    await waitFor(() => {
+      expect(useExplorerStore.getState().accounts.find((a) => a.id === "acc_gdrive_test")).toBeUndefined();
+      expect(useExplorerStore.getState().currentAccountId).toBeNull();
+    });
   });
 });

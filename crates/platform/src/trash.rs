@@ -69,6 +69,24 @@ impl TrashManager {
         let files_dir = self.trash_dir.join("files");
         let info_dir = self.trash_dir.join("info");
 
+        // First try native FreeDesktop gio trash (handles external mounts and multi-drive partitions)
+        let gio_status = std::process::Command::new("gio")
+            .arg("trash")
+            .arg(&abs_path)
+            .status();
+        if let Ok(status) = gio_status {
+            if status.success() {
+                info!("Successfully trashed '{}' via gio trash", abs_path.display());
+                return Ok(TrashedItem {
+                    id: file_name.to_string(),
+                    original_path: abs_path,
+                    deletion_date: timestamp,
+                    trash_file_path: files_dir.join(file_name),
+                    trash_info_path: info_dir.join(format!("{}.trashinfo", file_name)),
+                });
+            }
+        }
+
         // Determine non-colliding trash file name
         let mut dest_name = file_name.to_string();
         let mut counter = 1;
@@ -93,8 +111,16 @@ impl TrashManager {
             .map_err(|e| CirrusError::Io(format!("Failed to write .trashinfo: {}", e)))?;
 
         // Move the file into files/
-        fs::rename(&abs_path, &trash_file_path)
-            .map_err(|e| CirrusError::Io(format!("Failed to move file to trash: {}", e)))?;
+        if let Err(err) = fs::rename(&abs_path, &trash_file_path) {
+            if abs_path.is_file() {
+                fs::copy(&abs_path, &trash_file_path)
+                    .map_err(|e| CirrusError::Io(format!("Failed to copy file to trash: {}", e)))?;
+                let _ = fs::remove_file(&abs_path);
+            } else {
+                let _ = fs::remove_file(&trash_info_path);
+                return Err(CirrusError::Io(format!("Failed to move file to trash: {}", err)));
+            }
+        }
 
         info!(
             "Trashed '{}' -> {}",
