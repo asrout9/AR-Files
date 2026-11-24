@@ -124,6 +124,11 @@ body {
   width: 100vw;
 }
 
+button, input, select, textarea {
+  font-family: inherit;
+  font-size: inherit;
+}
+
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
@@ -180,7 +185,91 @@ body {
   -webkit-app-region: no-drag;
 }
 
-/* Path Bar & Breadcrumbs */
+/* Path Bar, Location Textbox & Breadcrumbs */
+.adw-path-container {
+  display: flex;
+  align-items: center;
+  position: relative;
+  flex: 1;
+  min-width: 140px;
+  height: 32px;
+  background-color: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--adw-radius-s);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.adw-path-container:focus-within {
+  border-color: var(--adw-accent-blue);
+  box-shadow: 0 0 0 1px var(--adw-accent-blue);
+}
+
+.adw-path-icon {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--dim-fg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+}
+
+.adw-path-input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--window-fg);
+  padding: 0 84px 0 30px;
+  outline: none;
+  font-family: inherit;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+
+.adw-path-input::selection {
+  background-color: var(--adw-accent-blue);
+  color: #ffffff;
+}
+
+.adw-path-actions {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  z-index: 2;
+}
+
+.adw-path-action-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  border-radius: var(--adw-radius-s);
+  color: var(--dim-fg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.adw-path-action-btn:hover {
+  background-color: var(--hover-bg);
+  color: var(--window-fg);
+}
+
 .adw-pathbar {
   display: flex;
   align-items: center;
@@ -190,13 +279,12 @@ body {
   padding: 2px 6px;
   height: 32px;
   gap: 2px;
-  max-width: 440px;
+  flex: 1;
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
   white-space: nowrap;
   scrollbar-width: none;
-  flex-shrink: 1;
 }
 
 .adw-pathbar::-webkit-scrollbar {
@@ -382,6 +470,7 @@ option {
   cursor: pointer;
   color: var(--sidebar-fg);
   font-weight: 500;
+  font-size: var(--app-font-size, 14px);
   transition: var(--adw-transition);
 }
 
@@ -393,6 +482,68 @@ option {
   background-color: var(--selected-bg);
   color: var(--selected-fg);
   font-weight: 600;
+}
+
+/* Context Menu & Popovers */
+.adw-context-menu {
+  font-family: var(--adw-font-sans);
+  font-size: var(--app-font-size, 14px);
+  color: var(--window-fg);
+  background-color: var(--popover-bg);
+  border-radius: var(--adw-radius-m);
+  box-shadow: var(--popover-shadow);
+  border: 1px solid var(--border-color);
+  padding: 6px 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.adw-context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  font-family: inherit;
+  font-size: var(--app-font-size, 14px);
+  font-weight: 500;
+  color: var(--window-fg);
+  background: none;
+  border: none;
+  border-radius: 0;
+  width: 100%;
+  text-align: left;
+  cursor: default;
+  transition: var(--adw-transition);
+  user-select: none;
+  line-height: 1.35;
+}
+
+.adw-context-menu-item:hover:not(:disabled) {
+  background-color: var(--hover-bg);
+}
+
+.adw-context-menu-item:active:not(:disabled) {
+  background-color: var(--selected-bg);
+}
+
+.adw-context-menu-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+button:disabled,
+input:disabled,
+[aria-disabled="true"] {
+  cursor: default !important;
+}
+
+.adw-context-menu-shortcut {
+  margin-left: auto;
+  font-size: 0.85em;
+  color: var(--dim-fg);
+  font-variant-numeric: tabular-nums;
+  padding-left: 14px;
+  white-space: nowrap;
 }
 
 /* Main Viewport */

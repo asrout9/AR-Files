@@ -765,6 +765,14 @@ async function handleMockCommand<T>(cmd: string, args: Record<string, unknown>):
       return { success: true } as unknown as T;
     }
 
+    case "copy_entries": {
+      return { success: true } as unknown as T;
+    }
+
+    case "move_entries": {
+      return { success: true } as unknown as T;
+    }
+
     default:
       return null as unknown as T;
   }

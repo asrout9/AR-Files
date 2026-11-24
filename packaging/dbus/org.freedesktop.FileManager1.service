@@ -1,4 +1,4 @@
 [D-BUS Service]
 Name=org.freedesktop.FileManager1
-Exec=/usr/bin/cirrus-files --gapplication-service
-SystemdService=cirrus-files.service
+Exec=ar-files --gapplication-service
+SystemdService=ar-files.service

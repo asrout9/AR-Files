@@ -42,6 +42,13 @@ export interface BreadcrumbItem {
   name: string;
 }
 
+export interface ClipboardState {
+  mode: "copy" | "cut";
+  entries: EntryRecord[];
+  sourceAccountId: string | null;
+  sourceFolderId: string | null;
+}
+
 export interface TabItem {
   id: string;
   title: string;
@@ -254,6 +261,14 @@ interface ExplorerState {
     outputPath?: string
   ) => Promise<{ output_path: string; original_size: number; compressed_size: number }>;
   extractArchive: (archivePath: string, destinationDir: string) => Promise<void>;
+
+  // Clipboard & Selection Actions
+  clipboard: ClipboardState | null;
+  copySelected: (explicitEntries?: EntryRecord[]) => void;
+  cutSelected: (explicitEntries?: EntryRecord[]) => void;
+  pasteClipboard: (targetFolderId?: string | null) => Promise<void>;
+  duplicateSelected: (explicitEntries?: EntryRecord[]) => Promise<void>;
+  clearClipboard: () => void;
 }
 
 const userHome =
@@ -321,6 +336,7 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
   isLoading: false,
   selectedIds: new Set(),
   lastSelectedAnchorId: null,
+  clipboard: null,
 
   viewMode: "list",
   sortBy: "name",
@@ -1848,6 +1864,7 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
       await get().loadEntries();
     } catch (err) {
       console.error("Move failed", err);
+      throw err;
     }
   },
 
@@ -1861,6 +1878,7 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
       await get().loadEntries();
     } catch (err) {
       console.error("Copy failed", err);
+      throw err;
     }
   },
 
@@ -1977,5 +1995,219 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
       }
     }
     set({ accountMountPaths: mountMap });
+  },
+
+  copySelected: (explicitEntries) => {
+    const { selectedIds, entries, currentAccountId, currentFolderId, showToast } = get();
+    const target =
+      explicitEntries && explicitEntries.length > 0
+        ? explicitEntries
+        : entries.filter((e) => selectedIds.has(e.id));
+    if (target.length === 0) return;
+
+    set({
+      clipboard: {
+        mode: "copy",
+        entries: target,
+        sourceAccountId: currentAccountId,
+        sourceFolderId: currentFolderId,
+      },
+    });
+
+    try {
+      const paths = target.map((e) => e.path || e.id).join("\n");
+      navigator.clipboard?.writeText(paths);
+    } catch {}
+
+    const count = target.length;
+    showToast(count === 1 ? `Copied "${target[0].name}"` : `Copied ${count} items`);
+  },
+
+  cutSelected: (explicitEntries) => {
+    const { selectedIds, entries, currentAccountId, currentFolderId, showToast } = get();
+    const target =
+      explicitEntries && explicitEntries.length > 0
+        ? explicitEntries
+        : entries.filter((e) => selectedIds.has(e.id));
+    if (target.length === 0) return;
+
+    set({
+      clipboard: {
+        mode: "cut",
+        entries: target,
+        sourceAccountId: currentAccountId,
+        sourceFolderId: currentFolderId,
+      },
+    });
+
+    try {
+      const paths = target.map((e) => e.path || e.id).join("\n");
+      navigator.clipboard?.writeText(paths);
+    } catch {}
+
+    const count = target.length;
+    showToast(count === 1 ? `Cut "${target[0].name}"` : `Cut ${count} items`);
+  },
+
+  pasteClipboard: async (targetFolderId) => {
+    const {
+      clipboard,
+      currentFolderId,
+      showToast,
+      addActiveJob,
+      updateActiveJob,
+      removeActiveJob,
+    } = get();
+    if (!clipboard || clipboard.entries.length === 0) return;
+
+    const destFolder =
+      targetFolderId !== undefined && targetFolderId !== null
+        ? targetFolderId
+        : currentFolderId;
+
+    const entries = clipboard.entries;
+    const totalItems = entries.length;
+    const isCut = clipboard.mode === "cut";
+    const opType: "move" | "copy" = isCut ? "move" : "copy";
+    const opVerb = isCut ? "Moving" : "Copying";
+    const pastVerb = isCut ? "Moved" : "Pasted";
+    const totalBytes = entries.reduce((acc, e) => acc + (e.size || 0), 0);
+
+    const jobId = `job_paste_${Date.now()}`;
+    const controller = new AbortController();
+    jobAbortControllers.set(jobId, controller);
+
+    addActiveJob({
+      id: jobId,
+      type: opType,
+      title:
+        totalItems === 1
+          ? `${opVerb} "${entries[0].name}"`
+          : `${opVerb} ${totalItems} items`,
+      itemsCompleted: 0,
+      totalItems,
+      bytesProcessed: 0,
+      totalBytes,
+      speedBps: 0,
+      etaSeconds: null,
+      status: "running",
+    });
+
+    const startTime = Date.now();
+    let completedItems = 0;
+    let processedBytes = 0;
+
+    try {
+      const chunkSize = totalItems <= 15 ? 1 : Math.min(10, Math.ceil(totalItems / 10));
+
+      for (let i = 0; i < totalItems; i += chunkSize) {
+        if (controller.signal.aborted) {
+          console.warn("Paste operation aborted");
+          break;
+        }
+
+        const chunk = entries.slice(i, i + chunkSize);
+        const chunkIds = chunk.map((e) => e.path || e.id);
+
+        if (isCut) {
+          await invokeCommand("move_entries", {
+            entry_ids: chunkIds,
+            target_parent_id: destFolder,
+          });
+        } else {
+          await invokeCommand("copy_entries", {
+            entry_ids: chunkIds,
+            target_parent_id: destFolder,
+            collision: "keep_both",
+          });
+        }
+
+        completedItems += chunk.length;
+        const chunkBytes = chunk.reduce((acc, e) => acc + (e.size || 0), 0);
+        processedBytes += chunkBytes;
+
+        const elapsedSec = (Date.now() - startTime) / 1000;
+        const speedBps =
+          elapsedSec > 0 && processedBytes > 0
+            ? Math.round(processedBytes / elapsedSec)
+            : 0;
+        const speedItems = elapsedSec > 0 ? completedItems / elapsedSec : 0;
+        const remainingItems = totalItems - completedItems;
+        const etaSeconds =
+          speedItems > 0 && remainingItems > 0
+            ? Math.ceil(remainingItems / speedItems)
+            : null;
+
+        updateActiveJob(jobId, {
+          itemsCompleted: completedItems,
+          bytesProcessed: processedBytes,
+          speedBps,
+          etaSeconds,
+        });
+
+        if (totalItems > 1) {
+          await new Promise((r) => setTimeout(r, 15));
+        }
+      }
+
+      await get().loadEntries();
+
+      if (isCut) {
+        set({ clipboard: null });
+      }
+
+      const isAborted = controller.signal.aborted;
+      updateActiveJob(jobId, {
+        status: isAborted ? "cancelled" : "completed",
+        itemsCompleted: completedItems,
+        bytesProcessed: processedBytes,
+      });
+
+      if (!isAborted) {
+        showToast(
+          totalItems === 1
+            ? `${pastVerb} "${entries[0].name}"`
+            : `${pastVerb} ${completedItems} item${completedItems > 1 ? "s" : ""}`
+        );
+      }
+
+      setTimeout(() => {
+        removeActiveJob(jobId);
+        jobAbortControllers.delete(jobId);
+      }, 1200);
+    } catch (err: any) {
+      console.error("Paste operation failed:", err);
+      updateActiveJob(jobId, {
+        status: "failed",
+      });
+      showToast(err.message || "Paste operation failed");
+      setTimeout(() => {
+        removeActiveJob(jobId);
+        jobAbortControllers.delete(jobId);
+      }, 2500);
+      throw err;
+    }
+  },
+
+  duplicateSelected: async (explicitEntries) => {
+    const { selectedIds, entries, currentFolderId, copyItems, showToast } = get();
+    const target =
+      explicitEntries && explicitEntries.length > 0
+        ? explicitEntries
+        : entries.filter((e) => selectedIds.has(e.id));
+    if (target.length === 0) return;
+
+    const ids = target.map((e) => e.id);
+    const count = ids.length;
+    try {
+      await copyItems(ids, currentFolderId, "keep_both");
+      showToast(count === 1 ? `Duplicated "${target[0].name}"` : `Duplicated ${count} items`);
+    } catch (err: any) {
+      showToast(err.message || "Duplicate failed");
+    }
+  },
+
+  clearClipboard: () => {
+    set({ clipboard: null });
   },
 }));

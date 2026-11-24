@@ -60,6 +60,12 @@ export const App: React.FC = () => {
     removeActiveJob,
     cancelActiveJob,
     navigateTo,
+    clipboard,
+    copySelected,
+    cutSelected,
+    pasteClipboard,
+    duplicateSelected,
+    selectAll,
   } = useExplorerStore();
 
   const [pickerConfig] = useState<{
@@ -133,6 +139,39 @@ export const App: React.FC = () => {
         await redoLastOperation();
         showToast("Operation redone");
       }
+      // Ctrl+C: Copy
+      else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "c" || e.key === "C")) {
+        if (selectedIds.size > 0) {
+          e.preventDefault();
+          copySelected();
+        }
+      }
+      // Ctrl+X: Cut
+      else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "x" || e.key === "X")) {
+        if (selectedIds.size > 0) {
+          e.preventDefault();
+          cutSelected();
+        }
+      }
+      // Ctrl+V: Paste
+      else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "v" || e.key === "V")) {
+        if (clipboard && clipboard.entries.length > 0) {
+          e.preventDefault();
+          await pasteClipboard();
+        }
+      }
+      // Ctrl+A: Select All
+      else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "a" || e.key === "A")) {
+        e.preventDefault();
+        selectAll();
+      }
+      // Ctrl+D: Duplicate
+      else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "d" || e.key === "D")) {
+        if (selectedIds.size > 0) {
+          e.preventDefault();
+          await duplicateSelected();
+        }
+      }
       // F2: Rename or Batch Rename
       else if (e.key === "F2") {
         e.preventDefault();
@@ -196,6 +235,12 @@ export const App: React.FC = () => {
     isQuickPreviewOpen,
     setQuickPreviewOpen,
     setPreferencesOpen,
+    clipboard,
+    copySelected,
+    cutSelected,
+    pasteClipboard,
+    duplicateSelected,
+    selectAll,
   ]);
 
   // Navigate on external request (D-Bus FileManager1 or CLI open)

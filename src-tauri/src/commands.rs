@@ -125,15 +125,81 @@ pub async fn rename_entry(state: &AppState, id: String, new_name: String) -> Res
     state.ops_mgr.rename_entry(&id, &new_name).await
 }
 
+fn normalize_local_path(p: &str) -> String {
+    let mut s = p.trim();
+    if s.starts_with("file://") {
+        s = &s[7..];
+    }
+    while s.len() > 1 && s.ends_with('/') {
+        s = &s[..s.len() - 1];
+    }
+    if s == "~" {
+        if let Ok(home) = std::env::var("HOME") {
+            return home;
+        }
+    } else if s.starts_with("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return format!("{}{}", home, &s[1..]);
+        }
+    }
+    s.to_string()
+}
+
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_recursive(&entry.path(), &dst.join(entry.file_name()))?;
+        } else {
+            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
 pub async fn move_entries(
     state: &AppState,
     entry_ids: Vec<String>,
     target_parent_id: Option<String>,
 ) -> Result<Vec<EntryRecord>> {
-    state
-        .ops_mgr
-        .move_entries(&entry_ids, target_parent_id.as_deref())
-        .await
+    let target_dir_cleaned = target_parent_id.as_deref().map(normalize_local_path);
+    let mut local_ids = Vec::new();
+    let mut db_ids = Vec::new();
+    for id in &entry_ids {
+        let cleaned = normalize_local_path(id);
+        let path = std::path::Path::new(&cleaned);
+        if cleaned.starts_with('/') || path.is_absolute() || path.exists() {
+            local_ids.push(cleaned);
+        } else {
+            db_ids.push(id.clone());
+        }
+    }
+
+    if let Some(target_dir) = &target_dir_cleaned {
+        let target_path = std::path::Path::new(target_dir);
+        if target_path.exists() && target_path.is_dir() {
+            for id in &local_ids {
+                let src_path = std::path::Path::new(id);
+                if let Some(fname) = src_path.file_name() {
+                    let dest = target_path.join(fname);
+                    if src_path != dest {
+                        let _ = std::fs::rename(src_path, &dest);
+                    }
+                }
+            }
+        }
+    }
+
+    if !db_ids.is_empty() {
+        state
+            .ops_mgr
+            .move_entries(&db_ids, target_parent_id.as_deref())
+            .await
+    } else {
+        Ok(Vec::new())
+    }
 }
 
 pub async fn copy_entries(
@@ -142,10 +208,62 @@ pub async fn copy_entries(
     target_parent_id: Option<String>,
     collision: CollisionResolution,
 ) -> Result<Vec<EntryRecord>> {
-    state
-        .ops_mgr
-        .copy_entries(&entry_ids, target_parent_id.as_deref(), collision)
-        .await
+    let target_dir_cleaned = target_parent_id.as_deref().map(normalize_local_path);
+    let mut local_ids = Vec::new();
+    let mut db_ids = Vec::new();
+    for id in &entry_ids {
+        let cleaned = normalize_local_path(id);
+        let path = std::path::Path::new(&cleaned);
+        if cleaned.starts_with('/') || path.is_absolute() || path.exists() {
+            local_ids.push(cleaned);
+        } else {
+            db_ids.push(id.clone());
+        }
+    }
+
+    if let Some(target_dir) = &target_dir_cleaned {
+        let target_path = std::path::Path::new(target_dir);
+        if target_path.exists() && target_path.is_dir() {
+            for id in &local_ids {
+                let src_path = std::path::Path::new(id);
+                if let Some(fname) = src_path.file_name() {
+                    let mut dest = target_path.join(fname);
+                    if dest.exists() {
+                        match collision {
+                            CollisionResolution::Skip => continue,
+                            CollisionResolution::KeepBoth => {
+                                let stem = src_path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+                                let ext = src_path.extension().and_then(|s| s.to_str()).map(|e| format!(".{}", e)).unwrap_or_default();
+                                dest = target_path.join(format!("{} (copy){}", stem, ext));
+                                let mut counter = 2;
+                                while dest.exists() {
+                                    dest = target_path.join(format!("{} (copy {}){}", stem, counter, ext));
+                                    counter += 1;
+                                }
+                            }
+                            CollisionResolution::Replace => {
+                                // Overwrite
+                            }
+                        }
+                    }
+                    if src_path.is_dir() {
+                        let _ = copy_dir_recursive(src_path, &dest);
+                    } else {
+                        let _ = std::fs::copy(src_path, dest);
+                    }
+                }
+            }
+        }
+    }
+
+    if !db_ids.is_empty() {
+        state
+            .ops_mgr
+            .copy_entries(&db_ids, target_parent_id.as_deref(), collision)
+            .await
+    } else {
+        Ok(Vec::new())
+    }
 }
 
 pub async fn trash_entries(state: &AppState, entry_ids: Vec<String>) -> Result<()> {

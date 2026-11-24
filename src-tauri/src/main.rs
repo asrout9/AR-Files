@@ -352,6 +352,49 @@ async fn handle_ipc_command(
                 }),
             }
         }
+        "copy_entries" => {
+            let entry_ids: Vec<String> = serde_json::from_value(
+                args.get("entry_ids")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Array(Vec::new())),
+            )
+            .unwrap_or_default();
+            let target_parent_id = args
+                .get("target_parent_id")
+                .or_else(|| args.get("target_path"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let collision_str = args
+                .get("collision")
+                .and_then(|v| v.as_str())
+                .unwrap_or("keep_both");
+            let collision = match collision_str {
+                "replace" => cirrus_ops::CollisionResolution::Replace,
+                "skip" => cirrus_ops::CollisionResolution::Skip,
+                _ => cirrus_ops::CollisionResolution::KeepBoth,
+            };
+            match commands::copy_entries(state, entry_ids, target_parent_id, collision).await {
+                Ok(items) => serde_json::json!({ "success": true, "data": items }),
+                Err(e) => serde_json::json!({ "success": false, "error": e.to_string() }),
+            }
+        }
+        "move_entries" => {
+            let entry_ids: Vec<String> = serde_json::from_value(
+                args.get("entry_ids")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Array(Vec::new())),
+            )
+            .unwrap_or_default();
+            let target_parent_id = args
+                .get("target_parent_id")
+                .or_else(|| args.get("target_path"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            match commands::move_entries(state, entry_ids, target_parent_id).await {
+                Ok(items) => serde_json::json!({ "success": true, "data": items }),
+                Err(e) => serde_json::json!({ "success": false, "error": e.to_string() }),
+            }
+        }
         _ => {
             serde_json::json!({ "success": false, "error": format!("Unknown command: {}", cmd) })
         }

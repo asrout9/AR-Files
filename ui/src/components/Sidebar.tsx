@@ -522,15 +522,27 @@ export const Sidebar: React.FC = () => {
           const isActive = currentAccountId === account.id && currentFolderId === null;
           const used = account.quota_used || 0;
           const total = account.quota_total || 1;
-          const rawPercent = account.quota_total ? (used / total) * 100 : 0;
-          const barWidth = used > 0 ? Math.max(2, Math.min(100, Math.round(rawPercent) || Number(rawPercent.toFixed(1)))) : 0;
+          const rawPercent = account.quota_total ? Math.min(100, Math.max(0, (used / total) * 100)) : 0;
           const isOffline = account.sync_status === "offline";
+          const quotaColor =
+            rawPercent >= 95
+              ? "var(--state-error, #e01b24)"
+              : rawPercent >= 85
+              ? "var(--state-warning, #f5a623)"
+              : "var(--adw-accent-blue)";
+          const circumference = 43.98; // 2 * Math.PI * 7
+          const strokeDashoffset = circumference - (rawPercent / 100) * circumference;
 
           return (
             <div
               key={account.id}
               className={`adw-sidebar-item ${isActive ? "active" : ""}`}
-              style={{ flexDirection: "column", alignItems: "flex-start", gap: 4 }}
+              style={{
+                flexDirection: isOffline ? "column" : "row",
+                alignItems: isOffline ? "flex-start" : "center",
+                gap: isOffline ? 4 : 0,
+                padding: "6px 10px",
+              }}
               onClick={() => navigateTo(account.id, null, account.name, true)}
               onContextMenu={(e) => {
                 e.preventDefault();
@@ -542,12 +554,92 @@ export const Sidebar: React.FC = () => {
                 });
               }}
             >
-              <div style={{ display: "flex", alignItems: "center", width: "100%", justifyContent: "space-between" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <Cloud size={16} color="var(--adw-accent-blue)" />
-                  <span>{account.name}</span>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  width: "100%",
+                  justifyContent: "space-between",
+                  gap: 8,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, flex: 1 }}>
+                  <Cloud size={16} color="var(--adw-accent-blue)" style={{ flexShrink: 0 }} />
+                  <span
+                    style={{
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                    title={account.name}
+                  >
+                    {account.name}
+                  </span>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                  {/* Circular Storage Size Indicator - placed LEFT of Work Offline & Sync Now */}
+                  {account.quota_total ? (
+                    <div
+                      className="adw-circular-quota"
+                      role="progressbar"
+                      aria-valuenow={Math.round(rawPercent)}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-label={`Storage quota: ${formatQuota(account.quota_used, account.quota_total)}`}
+                      title={`Storage: ${formatQuota(account.quota_used, account.quota_total)} (${Math.round(rawPercent)}% used)`}
+                      style={{
+                        position: "relative",
+                        width: 20,
+                        height: 20,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                        cursor: "help",
+                      }}
+                    >
+                      <svg width="20" height="20" viewBox="0 0 20 20" style={{ transform: "rotate(-90deg)" }}>
+                        <circle
+                          cx="10"
+                          cy="10"
+                          r="7"
+                          fill="none"
+                          stroke="rgba(128, 128, 128, 0.25)"
+                          strokeWidth="2.2"
+                        />
+                        <circle
+                          cx="10"
+                          cy="10"
+                          r="7"
+                          fill="none"
+                          stroke={quotaColor}
+                          strokeWidth="2.2"
+                          strokeDasharray={circumference}
+                          strokeDashoffset={strokeDashoffset}
+                          strokeLinecap="round"
+                          style={{ transition: "stroke-dashoffset 0.35s ease" }}
+                        />
+                      </svg>
+                      <span
+                        className="tabular-nums"
+                        style={{
+                          position: "absolute",
+                          width: 1,
+                          height: 1,
+                          padding: 0,
+                          margin: -1,
+                          overflow: "hidden",
+                          clip: "rect(0, 0, 0, 0)",
+                          border: 0,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {formatQuota(account.quota_used, account.quota_total)}
+                      </span>
+                    </div>
+                  ) : null}
+
+                  {/* Work Offline Button (cloud icon) */}
                   <button
                     className="adw-btn adw-btn-icon"
                     style={{ width: 20, height: 20, border: "none", background: "none", padding: 0 }}
@@ -557,8 +649,14 @@ export const Sidebar: React.FC = () => {
                       toggleAccountOffline(account.id);
                     }}
                   >
-                    {isOffline ? <CloudOff size={13} color="var(--dim-fg)" /> : <Cloud size={13} color="var(--state-available)" />}
+                    {isOffline ? (
+                      <CloudOff size={13} color="var(--dim-fg)" />
+                    ) : (
+                      <Cloud size={13} color="var(--state-available)" />
+                    )}
                   </button>
+
+                  {/* Sync Now Button (round sync icon) */}
                   <button
                     className="adw-btn adw-btn-icon"
                     style={{ width: 20, height: 20, border: "none", background: "none", padding: 0 }}
@@ -596,36 +694,6 @@ export const Sidebar: React.FC = () => {
                   Offline {pendingUploadsCount > 0 ? `• ${pendingUploadsCount} pending` : ""}
                 </div>
               )}
-
-              {/* Quota Bar */}
-              {account.quota_total ? (
-                <div style={{ width: "100%", marginTop: 4 }}>
-                  <div
-                    style={{
-                      height: 5,
-                      width: "100%",
-                      backgroundColor: "rgba(128, 128, 128, 0.22)",
-                      borderRadius: 3,
-                      overflow: "hidden",
-                    }}
-                  >
-                    <div
-                      style={{
-                        height: "100%",
-                        width: `${barWidth}%`,
-                        backgroundColor: rawPercent > 90 ? "var(--state-error)" : "var(--adw-accent-blue)",
-                        borderRadius: 3,
-                      }}
-                    />
-                  </div>
-                  <span
-                    className="tabular-nums"
-                    style={{ fontSize: 10, color: "var(--dim-fg)", display: "block", marginTop: 2 }}
-                  >
-                    {formatQuota(account.quota_used, account.quota_total)}
-                  </span>
-                </div>
-              ) : null}
             </div>
           );
         })}

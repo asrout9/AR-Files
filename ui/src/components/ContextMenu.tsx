@@ -23,6 +23,11 @@ import {
   CheckSquare,
   RefreshCw,
   FileDown,
+  Copy,
+  Scissors,
+  ClipboardPaste,
+  CopyPlus,
+  Link,
 } from "lucide-react";
 import { EntryRecord } from "../types";
 import { useExplorerStore } from "../store/useExplorerStore";
@@ -80,6 +85,12 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     breadcrumbs,
     accountMountPaths,
     loadEntries,
+    fontSize,
+    clipboard,
+    copySelected,
+    cutSelected,
+    pasteClipboard,
+    duplicateSelected,
   } = useExplorerStore();
 
   useEffect(() => {
@@ -92,11 +103,122 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
-  // Keep menu within the visible viewport
-  const menuWidth = 220;
-  const menuHeight = entry ? 440 : 250;
+  // Dynamic font size scaling based on app preferences
+  const currentFontSize = fontSize || 14;
+  const scale = currentFontSize / 14;
+  const iconSize = Math.max(12, Math.round(15 * scale));
+  const menuWidth = Math.max(220, Math.round(230 * scale));
+  const itemPaddingY = Math.max(5, Math.round(7 * scale));
+  const itemPaddingX = Math.max(8, Math.round(12 * scale));
+  const itemGap = Math.max(6, Math.round(10 * scale));
+  const shortcutPaddingLeft = Math.round(12 * scale);
+  const shortcutFontSize = `${Math.max(9, Math.round(currentFontSize * 0.82))}px`;
+
+  // Dynamic viewport clamping
+  const menuHeight = entry ? Math.round(620 * scale) : Math.round(320 * scale);
   const clampedX = Math.max(8, Math.min(x, window.innerWidth - menuWidth - 12));
   const clampedY = Math.max(8, Math.min(y, window.innerHeight - menuHeight - 12));
+
+  const hasClipboard = Boolean(clipboard && clipboard.entries.length > 0);
+  const isMultiSelected = Boolean(entry && selectedIds.size > 1 && selectedIds.has(entry.id));
+
+  const menuContainerStyle: React.CSSProperties = {
+    position: "fixed",
+    top: clampedY,
+    left: clampedX,
+    zIndex: 901,
+    backgroundColor: "var(--popover-bg)",
+    borderRadius: "var(--adw-radius-m)",
+    boxShadow: "var(--popover-shadow)",
+    padding: `${Math.round(6 * scale)}px 0`,
+    minWidth: menuWidth,
+    width: menuWidth,
+    maxHeight: "calc(100vh - 24px)",
+    overflowY: "auto",
+    fontSize: `var(--app-font-size, ${currentFontSize}px)`,
+    border: "1px solid var(--border-color)",
+    display: "flex",
+    flexDirection: "column",
+  };
+
+  const itemStyle: React.CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    gap: itemGap,
+    padding: `${itemPaddingY}px ${itemPaddingX}px`,
+    fontSize: `var(--app-font-size, ${currentFontSize}px)`,
+    fontFamily: "inherit",
+    fontWeight: 500,
+    color: "var(--window-fg)",
+    background: "none",
+    border: "none",
+    borderRadius: 0,
+    width: "100%",
+    cursor: "default",
+    textAlign: "left",
+    lineHeight: 1.35,
+    userSelect: "none",
+  };
+
+  const shortcutStyle: React.CSSProperties = {
+    marginLeft: "auto",
+    fontSize: shortcutFontSize,
+    color: "var(--dim-fg)",
+    paddingLeft: shortcutPaddingLeft,
+    whiteSpace: "nowrap",
+  };
+
+  const separatorStyle: React.CSSProperties = {
+    height: 1,
+    backgroundColor: "var(--border-color)",
+    margin: `${Math.round(4 * scale)}px 0`,
+  };
+
+  const handleCopy = () => {
+    if (entry) {
+      if (isMultiSelected) {
+        copySelected();
+      } else {
+        copySelected([entry]);
+      }
+    }
+    onClose();
+  };
+
+  const handleCut = () => {
+    if (entry) {
+      if (isMultiSelected) {
+        cutSelected();
+      } else {
+        cutSelected([entry]);
+      }
+    }
+    onClose();
+  };
+
+  const handleDuplicate = () => {
+    if (entry) {
+      if (isMultiSelected) {
+        duplicateSelected();
+      } else {
+        duplicateSelected([entry]);
+      }
+    }
+    onClose();
+  };
+
+  const handleCopyPath = () => {
+    if (entry) {
+      const p = entry.path || entry.id;
+      try {
+        navigator.clipboard?.writeText(p);
+        showToast("Path copied to clipboard");
+      } catch {
+        showToast("Failed to copy path");
+      }
+    }
+    onClose();
+  };
 
   // When right clicking inside a folder on empty space
   if (!entry) {
@@ -176,135 +298,117 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         <div
           role="menu"
           aria-label="Folder context menu"
-          style={{
-            position: "fixed",
-            top: clampedY,
-            left: clampedX,
-            zIndex: 901,
-            backgroundColor: "var(--popover-bg)",
-            borderRadius: "var(--adw-radius-m)",
-            boxShadow: "var(--popover-shadow)",
-            padding: "6px 0",
-            minWidth: 220,
-            border: "1px solid var(--border-color)",
-            display: "flex",
-            flexDirection: "column",
-          }}
+          className="adw-context-menu"
+          style={menuContainerStyle}
         >
           <button
             role="menuitem"
-            className="adw-sidebar-item"
-            style={{
-              borderRadius: 0,
-              border: "none",
-              background: "none",
-              width: "100%",
-            }}
+            className="adw-context-menu-item adw-sidebar-item"
+            style={itemStyle}
             onClick={handleCreateFolder}
           >
-            <FolderPlus size={15} color="var(--adw-accent-blue)" />
+            <FolderPlus size={iconSize} color="var(--adw-accent-blue)" />
             <span>New Folder...</span>
+            <span style={shortcutStyle}>Ctrl+Shift+N</span>
           </button>
 
           <button
             role="menuitem"
-            className="adw-sidebar-item"
-            style={{
-              borderRadius: 0,
-              border: "none",
-              background: "none",
-              width: "100%",
-            }}
+            className="adw-context-menu-item adw-sidebar-item"
+            style={itemStyle}
             onClick={handleOpenTerminalHere}
           >
-            <Terminal size={15} />
+            <Terminal size={iconSize} />
             <span>Open in Terminal</span>
           </button>
 
-          <div
-            style={{
-              height: 1,
-              backgroundColor: "var(--border-color)",
-              margin: "4px 0",
-            }}
-          />
+          <div style={separatorStyle} />
 
+          {/* Paste in Empty Space */}
           <button
             role="menuitem"
-            className="adw-sidebar-item"
+            className="adw-context-menu-item adw-sidebar-item"
             style={{
-              borderRadius: 0,
-              border: "none",
-              background: "none",
-              width: "100%",
+              ...itemStyle,
+              opacity: hasClipboard ? 1 : 0.45,
+              cursor: "default",
             }}
+            disabled={!hasClipboard}
             onClick={() => {
-              setSmartCleanupOpen(true);
-              onClose();
+              if (hasClipboard) {
+                pasteClipboard();
+                onClose();
+              }
             }}
           >
-            <Sparkles size={15} color="var(--adw-accent-yellow)" />
-            <span>Folder Intelligence & Cleanup...</span>
+            <ClipboardPaste
+              size={iconSize}
+              color={hasClipboard ? "var(--adw-accent-blue)" : "var(--dim-fg)"}
+            />
+            <span>
+              {hasClipboard
+                ? `Paste (${clipboard!.entries.length} item${clipboard!.entries.length > 1 ? "s" : ""})`
+                : "Paste"}
+            </span>
+            <span style={shortcutStyle}>Ctrl+V</span>
           </button>
 
+          {/* Select All */}
           <button
             role="menuitem"
-            className="adw-sidebar-item"
-            style={{
-              borderRadius: 0,
-              border: "none",
-              background: "none",
-              width: "100%",
-            }}
+            className="adw-context-menu-item adw-sidebar-item"
+            style={itemStyle}
             onClick={() => {
               selectAll();
               onClose();
             }}
           >
-            <CheckSquare size={15} />
+            <CheckSquare size={iconSize} />
             <span>Select All</span>
+            <span style={shortcutStyle}>Ctrl+A</span>
           </button>
 
           <button
             role="menuitem"
-            className="adw-sidebar-item"
-            style={{
-              borderRadius: 0,
-              border: "none",
-              background: "none",
-              width: "100%",
-            }}
+            className="adw-context-menu-item adw-sidebar-item"
+            style={itemStyle}
             onClick={() => {
               loadEntries();
               showToast("Reloaded folder");
               onClose();
             }}
           >
-            <RefreshCw size={15} />
+            <RefreshCw size={iconSize} />
             <span>Reload</span>
+            <span style={shortcutStyle}>Ctrl+R</span>
           </button>
 
-          <div
-            style={{
-              height: 1,
-              backgroundColor: "var(--border-color)",
-              margin: "4px 0",
-            }}
-          />
+          <div style={separatorStyle} />
 
           <button
             role="menuitem"
-            className="adw-sidebar-item"
-            style={{
-              borderRadius: 0,
-              border: "none",
-              background: "none",
-              width: "100%",
+            className="adw-context-menu-item adw-sidebar-item"
+            style={itemStyle}
+            onClick={() => {
+              setSmartCleanupOpen(true);
+              onClose();
             }}
+          >
+            <Sparkles size={iconSize} color="var(--adw-accent-yellow)" />
+            <span>Folder Intelligence & Cleanup...</span>
+          </button>
+
+          <div style={separatorStyle} />
+
+          <button
+            role="menuitem"
+            className="adw-context-menu-item adw-sidebar-item"
+            style={itemStyle}
             onClick={handleCurrentFolderProperties}
           >
-            <Info size={15} />
-            <span>Properties (Alt+Enter)</span>
+            <Info size={iconSize} />
+            <span>Properties</span>
+            <span style={shortcutStyle}>Alt+Enter</span>
           </button>
         </div>
       </>
@@ -312,7 +416,6 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   }
 
   const isLocal = entry.account_id === "acc_local";
-  const isMultiSelected = selectedIds.size > 1 && selectedIds.has(entry.id);
   const isArchive =
     entry.name.endsWith(".zip") ||
     entry.name.endsWith(".tar.gz") ||
@@ -337,6 +440,25 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
       entry.path || entry.id,
       entry.name
     );
+    onClose();
+  };
+
+  const handleOpenInTerminal = async () => {
+    const mountPath = entry.account_id ? accountMountPaths[entry.account_id] : null;
+    const targetPath =
+      entry.local_path ||
+      (mountPath && entry.path ? `${mountPath}/${entry.path.replace(/^\//, "")}` : null) ||
+      entry.path ||
+      entry.id;
+    try {
+      await invokeCommand("open_in_terminal", {
+        path: targetPath,
+        account_id: entry.account_id,
+      });
+      showToast("Terminal opened");
+    } catch (err: any) {
+      showToast(err.message || "Failed to open terminal");
+    }
     onClose();
   };
 
@@ -426,118 +548,181 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         }}
       />
 
-      {/* Menu Card */}
+      {/* Menu Card for Selected Item(s) */}
       <div
         role="menu"
         aria-label="File context menu"
-        style={{
-          position: "fixed",
-          top: clampedY,
-          left: clampedX,
-          zIndex: 901,
-          backgroundColor: "var(--popover-bg)",
-          borderRadius: "var(--adw-radius-m)",
-          boxShadow: "var(--popover-shadow)",
-          padding: "6px 0",
-          minWidth: 210,
-          border: "1px solid var(--border-color)",
-          display: "flex",
-          flexDirection: "column",
-        }}
+        className="adw-context-menu"
+        style={menuContainerStyle}
       >
         {/* Open Actions */}
         <button
           role="menuitem"
-          className="adw-sidebar-item"
-          style={{
-            borderRadius: 0,
-            border: "none",
-            background: "none",
-            width: "100%",
-          }}
+          className="adw-context-menu-item adw-sidebar-item"
+          style={itemStyle}
           onClick={handleOpen}
         >
-          {entry.is_directory ? <FolderOpen size={15} /> : <ExternalLink size={15} />}
+          {entry.is_directory ? <FolderOpen size={iconSize} /> : <ExternalLink size={iconSize} />}
           <span>{entry.is_directory ? "Open Folder" : "Open"}</span>
+          <span style={shortcutStyle}>Enter</span>
         </button>
 
         {entry.is_directory && (
           <button
             role="menuitem"
-            className="adw-sidebar-item"
-            style={{
-              borderRadius: 0,
-              border: "none",
-              background: "none",
-              width: "100%",
-            }}
+            className="adw-context-menu-item adw-sidebar-item"
+            style={itemStyle}
             onClick={handleOpenInNewTab}
           >
-            <FolderPlus size={15} />
+            <FolderPlus size={iconSize} />
             <span>Open in New Tab</span>
+            <span style={shortcutStyle}>Ctrl+T</span>
           </button>
         )}
 
         {!entry.is_directory && onOpenWith && (
           <button
             role="menuitem"
-            className="adw-sidebar-item"
-            style={{
-              borderRadius: 0,
-              border: "none",
-              background: "none",
-              width: "100%",
-            }}
+            className="adw-context-menu-item adw-sidebar-item"
+            style={itemStyle}
             onClick={() => {
               onOpenWith(entry);
               onClose();
             }}
           >
-            <AppWindow size={15} color="var(--adw-accent-blue)" />
+            <AppWindow size={iconSize} color="var(--adw-accent-blue)" />
             <span>Open With...</span>
           </button>
         )}
 
         <button
           role="menuitem"
-          className="adw-sidebar-item"
-          style={{
-            borderRadius: 0,
-            border: "none",
-            background: "none",
-            width: "100%",
-          }}
-          onClick={async () => {
-            const mountPath = entry.account_id ? accountMountPaths[entry.account_id] : null;
-            const targetPath =
-              entry.local_path ||
-              (mountPath && entry.path ? `${mountPath}/${entry.path.replace(/^\//, "")}` : null) ||
-              entry.path ||
-              entry.id;
-            try {
-              await invokeCommand("open_in_terminal", {
-                path: targetPath,
-                account_id: entry.account_id,
-              });
-              showToast("Terminal opened");
-            } catch (err: any) {
-              showToast(err.message || "Failed to open terminal");
-            }
-            onClose();
-          }}
+          className="adw-context-menu-item adw-sidebar-item"
+          style={itemStyle}
+          onClick={handleOpenInTerminal}
         >
-          <Terminal size={15} />
+          <Terminal size={iconSize} />
           <span>Open in Terminal</span>
         </button>
 
-        {/* Separator */}
-        <div
-          style={{
-            height: 1,
-            backgroundColor: "var(--border-color)",
-            margin: "4px 0",
+        <div style={separatorStyle} />
+
+        {/* Cut */}
+        <button
+          role="menuitem"
+          className="adw-context-menu-item adw-sidebar-item"
+          style={itemStyle}
+          onClick={handleCut}
+        >
+          <Scissors size={iconSize} />
+          <span>{isMultiSelected ? `Cut (${selectedIds.size} items)` : "Cut"}</span>
+          <span style={shortcutStyle}>Ctrl+X</span>
+        </button>
+
+        {/* Copy */}
+        <button
+          role="menuitem"
+          className="adw-context-menu-item adw-sidebar-item"
+          style={itemStyle}
+          onClick={handleCopy}
+        >
+          <Copy size={iconSize} />
+          <span>{isMultiSelected ? `Copy (${selectedIds.size} items)` : "Copy"}</span>
+          <span style={shortcutStyle}>Ctrl+C</span>
+        </button>
+
+        {/* Paste (if directory: Paste into Folder, otherwise if clipboard has items: Paste) */}
+        {entry.is_directory ? (
+          <button
+            role="menuitem"
+            className="adw-context-menu-item adw-sidebar-item"
+            style={{
+              ...itemStyle,
+              opacity: hasClipboard ? 1 : 0.45,
+              cursor: "default",
+            }}
+            disabled={!hasClipboard}
+            onClick={() => {
+              if (hasClipboard) {
+                pasteClipboard(entry.path || entry.id);
+                onClose();
+              }
+            }}
+          >
+            <ClipboardPaste
+              size={iconSize}
+              color={hasClipboard ? "var(--adw-accent-blue)" : "var(--dim-fg)"}
+            />
+            <span>
+              {hasClipboard
+                ? `Paste into Folder (${clipboard!.entries.length})`
+                : "Paste into Folder"}
+            </span>
+            <span style={shortcutStyle}>Ctrl+V</span>
+          </button>
+        ) : (
+          hasClipboard && (
+            <button
+              role="menuitem"
+              className="adw-context-menu-item adw-sidebar-item"
+              style={itemStyle}
+              onClick={() => {
+                pasteClipboard();
+                onClose();
+              }}
+            >
+              <ClipboardPaste size={iconSize} color="var(--adw-accent-blue)" />
+              <span>
+                Paste ({clipboard!.entries.length} item{clipboard!.entries.length > 1 ? "s" : ""})
+              </span>
+              <span style={shortcutStyle}>Ctrl+V</span>
+            </button>
+          )
+        )}
+
+        {/* Duplicate */}
+        <button
+          role="menuitem"
+          className="adw-context-menu-item adw-sidebar-item"
+          style={itemStyle}
+          onClick={handleDuplicate}
+        >
+          <CopyPlus size={iconSize} />
+          <span>
+            {isMultiSelected ? `Duplicate (${selectedIds.size} items)` : "Duplicate"}
+          </span>
+          <span style={shortcutStyle}>Ctrl+D</span>
+        </button>
+
+        {/* Copy Path */}
+        <button
+          role="menuitem"
+          className="adw-context-menu-item adw-sidebar-item"
+          style={itemStyle}
+          onClick={handleCopyPath}
+        >
+          <Link size={iconSize} />
+          <span>Copy Path</span>
+        </button>
+
+        <div style={separatorStyle} />
+
+        {/* Select All */}
+        <button
+          role="menuitem"
+          className="adw-context-menu-item adw-sidebar-item"
+          style={itemStyle}
+          onClick={() => {
+            selectAll();
+            onClose();
           }}
-        />
+        >
+          <CheckSquare size={iconSize} />
+          <span>Select All</span>
+          <span style={shortcutStyle}>Ctrl+A</span>
+        </button>
+
+        <div style={separatorStyle} />
 
         {/* Cloud-Specific Hydration / Pin / Evict / Share Actions */}
         {!isLocal && (
@@ -545,16 +730,11 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
             {(entry.state === "cloud_only" || entry.state === "error") && (
               <button
                 role="menuitem"
-                className="adw-sidebar-item"
-                style={{
-                  borderRadius: 0,
-                  border: "none",
-                  background: "none",
-                  width: "100%",
-                }}
+                className="adw-context-menu-item adw-sidebar-item"
+                style={itemStyle}
                 onClick={handleDownloadNow}
               >
-                <Download size={15} />
+                <Download size={iconSize} />
                 <span>Download now</span>
               </button>
             )}
@@ -562,32 +742,22 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
             {entry.state === "hydrating" && (
               <button
                 role="menuitem"
-                className="adw-sidebar-item"
-                style={{
-                  borderRadius: 0,
-                  border: "none",
-                  background: "none",
-                  width: "100%",
-                }}
+                className="adw-context-menu-item adw-sidebar-item"
+                style={itemStyle}
                 onClick={handleCancelDownload}
               >
-                <XCircle size={15} color="var(--state-error)" />
+                <XCircle size={iconSize} color="var(--state-error)" />
                 <span>Cancel download</span>
               </button>
             )}
 
             <button
               role="menuitem"
-              className="adw-sidebar-item"
-              style={{
-                borderRadius: 0,
-                border: "none",
-                background: "none",
-                width: "100%",
-              }}
+              className="adw-context-menu-item adw-sidebar-item"
+              style={itemStyle}
               onClick={handleAlwaysKeep}
             >
-              {entry.state === "pinned" ? <PinOff size={15} /> : <Pin size={15} />}
+              {entry.state === "pinned" ? <PinOff size={iconSize} /> : <Pin size={iconSize} />}
               <span>
                 {entry.state === "pinned"
                   ? "Unpin from device"
@@ -598,62 +768,41 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
             {(entry.state === "available" || entry.state === "pinned") && (
               <button
                 role="menuitem"
-                className="adw-sidebar-item"
-                style={{
-                  borderRadius: 0,
-                  border: "none",
-                  background: "none",
-                  width: "100%",
-                }}
+                className="adw-context-menu-item adw-sidebar-item"
+                style={itemStyle}
                 onClick={handleFreeUpSpace}
               >
-                <Cloud size={15} />
+                <Cloud size={iconSize} />
                 <span>Free up space</span>
               </button>
             )}
 
             <button
               role="menuitem"
-              className="adw-sidebar-item"
-              style={{
-                borderRadius: 0,
-                border: "none",
-                background: "none",
-                width: "100%",
-              }}
+              className="adw-context-menu-item adw-sidebar-item"
+              style={itemStyle}
               onClick={handleCopyShareLink}
             >
-              <Share2 size={15} />
+              <Share2 size={iconSize} />
               <span>Copy share link</span>
             </button>
 
             {!entry.is_directory && (
               <button
                 role="menuitem"
-                className="adw-sidebar-item"
-                style={{
-                  borderRadius: 0,
-                  border: "none",
-                  background: "none",
-                  width: "100%",
-                }}
+                className="adw-context-menu-item adw-sidebar-item"
+                style={itemStyle}
                 onClick={() => {
                   openVersionHistory(entry);
                   onClose();
                 }}
               >
-                <History size={15} />
+                <History size={iconSize} />
                 <span>Version History</span>
               </button>
             )}
 
-            <div
-              style={{
-                height: 1,
-                backgroundColor: "var(--border-color)",
-                margin: "4px 0",
-              }}
-            />
+            <div style={separatorStyle} />
           </>
         )}
 
@@ -661,20 +810,16 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         {!entry.is_directory && (
           <button
             role="menuitem"
-            className="adw-sidebar-item"
-            style={{
-              borderRadius: 0,
-              border: "none",
-              background: "none",
-              width: "100%",
-            }}
+            className="adw-context-menu-item adw-sidebar-item"
+            style={itemStyle}
             onClick={() => {
               setQuickPreviewOpen(true);
               onClose();
             }}
           >
-            <Eye size={15} />
-            <span>Quick Preview (Space)</span>
+            <Eye size={iconSize} />
+            <span>Quick Preview</span>
+            <span style={shortcutStyle}>Space</span>
           </button>
         )}
 
@@ -682,19 +827,14 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         {isImageOrPdf && onCompressToSize && (
           <button
             role="menuitem"
-            className="adw-sidebar-item"
-            style={{
-              borderRadius: 0,
-              border: "none",
-              background: "none",
-              width: "100%",
-            }}
+            className="adw-context-menu-item adw-sidebar-item"
+            style={itemStyle}
             onClick={() => {
               onCompressToSize(entry);
               onClose();
             }}
           >
-            <FileDown size={15} color="var(--adw-accent-blue)" />
+            <FileDown size={iconSize} color="var(--adw-accent-blue)" />
             <span>Compress to Desired Size...</span>
           </button>
         )}
@@ -702,19 +842,14 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         {isArchive && onExtract && (
           <button
             role="menuitem"
-            className="adw-sidebar-item"
-            style={{
-              borderRadius: 0,
-              border: "none",
-              background: "none",
-              width: "100%",
-            }}
+            className="adw-context-menu-item adw-sidebar-item"
+            style={itemStyle}
             onClick={() => {
               onExtract();
               onClose();
             }}
           >
-            <FileArchive size={15} color="var(--adw-accent-blue)" />
+            <FileArchive size={iconSize} color="var(--adw-accent-blue)" />
             <span>Extract Archive...</span>
           </button>
         )}
@@ -722,147 +857,103 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         {onCompress && (
           <button
             role="menuitem"
-            className="adw-sidebar-item"
-            style={{
-              borderRadius: 0,
-              border: "none",
-              background: "none",
-              width: "100%",
-            }}
+            className="adw-context-menu-item adw-sidebar-item"
+            style={itemStyle}
             onClick={() => {
               onCompress();
               onClose();
             }}
           >
-            <Archive size={15} />
+            <Archive size={iconSize} />
             <span>Compress to ZIP...</span>
           </button>
         )}
 
-        <div
-          style={{
-            height: 1,
-            backgroundColor: "var(--border-color)",
-            margin: "4px 0",
-          }}
-        />
+        <div style={separatorStyle} />
 
         {/* Rename & Batch Rename */}
         {isMultiSelected && onBatchRename ? (
           <button
             role="menuitem"
-            className="adw-sidebar-item"
-            style={{
-              borderRadius: 0,
-              border: "none",
-              background: "none",
-              width: "100%",
-            }}
+            className="adw-context-menu-item adw-sidebar-item"
+            style={itemStyle}
             onClick={() => {
               onBatchRename();
               onClose();
             }}
           >
-            <Edit2 size={15} />
+            <Edit2 size={iconSize} />
             <span>Batch Rename ({selectedIds.size} items)...</span>
+            <span style={shortcutStyle}>F2</span>
           </button>
         ) : (
           <button
             role="menuitem"
-            className="adw-sidebar-item"
-            style={{
-              borderRadius: 0,
-              border: "none",
-              background: "none",
-              width: "100%",
-            }}
+            className="adw-context-menu-item adw-sidebar-item"
+            style={itemStyle}
             onClick={() => {
               onStartRename(entry);
               onClose();
             }}
           >
-            <Edit2 size={15} />
+            <Edit2 size={iconSize} />
             <span>Rename...</span>
+            <span style={shortcutStyle}>F2</span>
           </button>
         )}
 
         {/* Delete & Permanent Delete */}
         <button
           role="menuitem"
-          className="adw-sidebar-item"
-          style={{
-            borderRadius: 0,
-            border: "none",
-            background: "none",
-            width: "100%",
-          }}
+          className="adw-context-menu-item adw-sidebar-item"
+          style={itemStyle}
           onClick={handleTrash}
         >
-          <Trash2 size={15} color="var(--state-error)" />
+          <Trash2 size={iconSize} color="var(--state-error)" />
           <span style={{ color: "var(--state-error)" }}>Move to Trash</span>
+          <span style={shortcutStyle}>Del</span>
         </button>
 
         <button
           role="menuitem"
-          className="adw-sidebar-item"
-          style={{
-            borderRadius: 0,
-            border: "none",
-            background: "none",
-            width: "100%",
-          }}
+          className="adw-context-menu-item adw-sidebar-item"
+          style={itemStyle}
           onClick={handleDeletePermanent}
         >
-          <Trash size={15} color="var(--state-error)" />
-          <span style={{ color: "var(--state-error)" }}>
-            Delete Permanently (Shift+Del)
-          </span>
+          <Trash size={iconSize} color="var(--state-error)" />
+          <span style={{ color: "var(--state-error)" }}>Delete Permanently</span>
+          <span style={shortcutStyle}>Shift+Del</span>
         </button>
 
-        <div
-          style={{
-            height: 1,
-            backgroundColor: "var(--border-color)",
-            margin: "4px 0",
-          }}
-        />
+        <div style={separatorStyle} />
 
         {/* Folder Intelligence */}
         <button
           role="menuitem"
-          className="adw-sidebar-item"
-          style={{
-            borderRadius: 0,
-            border: "none",
-            background: "none",
-            width: "100%",
-          }}
+          className="adw-context-menu-item adw-sidebar-item"
+          style={itemStyle}
           onClick={() => {
             setSmartCleanupOpen(true);
             onClose();
           }}
         >
-          <Sparkles size={15} color="var(--adw-accent-yellow)" />
+          <Sparkles size={iconSize} color="var(--adw-accent-yellow)" />
           <span>Folder Intelligence & Cleanup...</span>
         </button>
 
         {/* Properties */}
         <button
           role="menuitem"
-          className="adw-sidebar-item"
-          style={{
-            borderRadius: 0,
-            border: "none",
-            background: "none",
-            width: "100%",
-          }}
+          className="adw-context-menu-item adw-sidebar-item"
+          style={itemStyle}
           onClick={() => {
             onOpenProperties(entry);
             onClose();
           }}
         >
-          <Info size={15} />
-          <span>Properties (Alt+Enter)</span>
+          <Info size={iconSize} />
+          <span>Properties</span>
+          <span style={shortcutStyle}>Alt+Enter</span>
         </button>
       </div>
     </>

@@ -415,7 +415,18 @@ class ARFilesApplication(Adw.Application):
             return {"success": False, "error": str(e)}
 
     def ensure_backend_running(self):
-        backend_bin = os.path.expanduser('~/.local/bin/ar-files-backend')
+        backend_candidates = [
+            os.path.expanduser('~/.local/bin/ar-files-backend'),
+            '/usr/local/bin/ar-files-backend',
+            '/usr/bin/ar-files-backend',
+            '/run/media/abhi/My Data Drive/Projects/TAURI-RUST/AR-Files/target/release/ar-files',
+            '/run/media/abhi/My Data Drive/Projects/TAURI-RUST/AR-Files/target/debug/ar-files',
+        ]
+        backend_bin = None
+        for cand in backend_candidates:
+            if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                backend_bin = cand
+                break
         sock_path = os.path.expanduser('~/.local/share/ar-files/ipc.sock')
 
         if os.path.exists(sock_path):
@@ -431,7 +442,7 @@ class ARFilesApplication(Adw.Application):
                 except Exception:
                     pass
 
-        if os.path.isfile(backend_bin) and os.access(backend_bin, os.X_OK):
+        if backend_bin and os.path.isfile(backend_bin) and os.access(backend_bin, os.X_OK):
             try:
                 self.backend_proc = subprocess.Popen(
                     [backend_bin],
@@ -788,11 +799,19 @@ class ARFilesApplication(Adw.Application):
         settings.set_enable_developer_extras(True)
         settings.set_enable_javascript(True)
 
-        ui_path = os.path.expanduser('~/.local/share/ar-files/ui/index.html')
-        if not os.path.exists(ui_path):
-            workspace_ui = '/run/media/abhi/My Data Drive/Projects/TAURI-RUST/AR-Files/ui/dist/index.html'
-            if os.path.exists(workspace_ui):
-                ui_path = workspace_ui
+        ui_candidates = [
+            os.path.expanduser('~/.local/share/ar-files/ui/index.html'),
+            '/usr/local/share/ar-files/ui/index.html',
+            '/usr/share/ar-files/ui/index.html',
+            '/run/media/abhi/My Data Drive/Projects/TAURI-RUST/AR-Files/ui/dist/index.html',
+        ]
+        ui_path = None
+        for cand in ui_candidates:
+            if os.path.exists(cand):
+                ui_path = cand
+                break
+        if not ui_path:
+            ui_path = ui_candidates[0]
 
         webview.load_uri(f'file://{ui_path}')
         win.set_content(webview)
@@ -927,11 +946,19 @@ class ARFilesApplication(Adw.Application):
         settings.set_enable_javascript(True)
 
         # Locate compiled Web UI
-        ui_path = os.path.expanduser('~/.local/share/ar-files/ui/index.html')
-        if not os.path.exists(ui_path):
-            workspace_ui = '/run/media/abhi/My Data Drive/Projects/TAURI-RUST/AR-Files/ui/dist/index.html'
-            if os.path.exists(workspace_ui):
-                ui_path = workspace_ui
+        ui_candidates = [
+            os.path.expanduser('~/.local/share/ar-files/ui/index.html'),
+            '/usr/local/share/ar-files/ui/index.html',
+            '/usr/share/ar-files/ui/index.html',
+            '/run/media/abhi/My Data Drive/Projects/TAURI-RUST/AR-Files/ui/dist/index.html',
+        ]
+        ui_path = None
+        for cand in ui_candidates:
+            if os.path.exists(cand):
+                ui_path = cand
+                break
+        if not ui_path:
+            ui_path = ui_candidates[0]
 
         webview.load_uri(f'file://{ui_path}')
         win.set_content(webview)
@@ -1810,10 +1837,135 @@ class ARFilesApplication(Adw.Application):
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
+        elif cmd == "copy_entries":
+            def _clean_path(p):
+                if not p:
+                    return ""
+                p = str(p).strip()
+                if p.startswith("file://"):
+                    import urllib.parse
+                    p = urllib.parse.unquote(p[7:])
+                p = os.path.expanduser(p)
+                p = os.path.normpath(p)
+                return p
+
+            entry_ids = args.get("entry_ids") or []
+            target_parent = _clean_path(args.get("target_parent_id") or args.get("target_path") or '~')
+            collision = args.get("collision") or "keep_both"
+
+            cleaned_pairs = [(orig, _clean_path(orig)) for orig in entry_ids]
+            local_pairs = [(orig, p) for orig, p in cleaned_pairs if os.path.exists(p)]
+            cloud_ids = [orig for orig, p in cleaned_pairs if not os.path.exists(p)]
+
+            copied_results = []
+            if local_pairs:
+                try:
+                    os.makedirs(target_parent, exist_ok=True)
+                    for orig, src in local_pairs:
+                        base_name = os.path.basename(src)
+                        if not base_name:
+                            continue
+                        dest = os.path.join(target_parent, base_name)
+
+                        # Prevent copying folder into itself
+                        if os.path.isdir(src):
+                            src_abs = os.path.abspath(src)
+                            parent_abs = os.path.abspath(target_parent)
+                            if parent_abs == src_abs or parent_abs.startswith(src_abs + os.sep):
+                                return {"success": False, "error": f"Cannot copy '{base_name}' into itself or a subfolder"}
+
+                        if os.path.exists(dest):
+                            if collision == "skip":
+                                continue
+                            elif collision == "keep_both" or os.path.abspath(src) == os.path.abspath(dest):
+                                stem, ext = os.path.splitext(base_name)
+                                cand = os.path.join(target_parent, f"{stem} (copy){ext}")
+                                counter = 2
+                                while os.path.exists(cand):
+                                    cand = os.path.join(target_parent, f"{stem} (copy {counter}){ext}")
+                                    counter += 1
+                                dest = cand
+
+                        if os.path.isdir(src):
+                            if os.path.exists(dest):
+                                shutil.copytree(src, dest, dirs_exist_ok=True)
+                            else:
+                                shutil.copytree(src, dest)
+                        else:
+                            shutil.copy2(src, dest)
+                        copied_results.append(dest)
+                except Exception as e:
+                    return {"success": False, "error": f"Failed copying local files: {e}"}
+
+            if cloud_ids:
+                res = self.send_backend_ipc("copy_entries", {
+                    "entry_ids": cloud_ids,
+                    "target_parent_id": args.get("target_parent_id"),
+                    "collision": collision,
+                })
+                if res and isinstance(res, dict) and res.get("success") is False:
+                    return res
+                return res or {"success": True, "copied": copied_results}
+
+            return {"success": True, "copied": copied_results}
+
+        elif cmd == "move_entries":
+            def _clean_path(p):
+                if not p:
+                    return ""
+                p = str(p).strip()
+                if p.startswith("file://"):
+                    import urllib.parse
+                    p = urllib.parse.unquote(p[7:])
+                p = os.path.expanduser(p)
+                p = os.path.normpath(p)
+                return p
+
+            entry_ids = args.get("entry_ids") or []
+            target_parent = _clean_path(args.get("target_parent_id") or args.get("target_path") or '~')
+
+            cleaned_pairs = [(orig, _clean_path(orig)) for orig in entry_ids]
+            local_pairs = [(orig, p) for orig, p in cleaned_pairs if os.path.exists(p)]
+            cloud_ids = [orig for orig, p in cleaned_pairs if not os.path.exists(p)]
+
+            moved_results = []
+            if local_pairs:
+                try:
+                    os.makedirs(target_parent, exist_ok=True)
+                    for orig, src in local_pairs:
+                        base_name = os.path.basename(src)
+                        if not base_name:
+                            continue
+                        dest = os.path.join(target_parent, base_name)
+                        if os.path.exists(dest) and os.path.abspath(src) == os.path.abspath(dest):
+                            continue
+                        if os.path.isdir(src):
+                            src_abs = os.path.abspath(src)
+                            parent_abs = os.path.abspath(target_parent)
+                            if parent_abs == src_abs or parent_abs.startswith(src_abs + os.sep):
+                                return {"success": False, "error": f"Cannot move '{base_name}' into itself or a subfolder"}
+                        shutil.move(src, dest)
+                        moved_results.append(dest)
+                except Exception as e:
+                    return {"success": False, "error": f"Failed moving local files: {e}"}
+
+            if cloud_ids:
+                res = self.send_backend_ipc("move_entries", {
+                    "entry_ids": cloud_ids,
+                    "target_parent_id": args.get("target_parent_id"),
+                })
+                if res and isinstance(res, dict) and res.get("success") is False:
+                    return res
+                return res or {"success": True, "moved": moved_results}
+
+            return {"success": True, "moved": moved_results}
+
         # All cloud operations are dispatched directly to the Rust backend daemon
         backend_cmds = {
             "list_accounts",
             "list_entries",
+            "copy_entries",
+            "move_entries",
             "start_google_oauth",
             "add_onedrive_account",
             "add_generic_account",

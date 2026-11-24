@@ -23,6 +23,9 @@ import {
   Copy,
   Check,
   Cloud,
+  Folder,
+  FolderTree,
+  ArrowRight,
   ExternalLink,
   Columns,
   Sparkles,
@@ -72,6 +75,8 @@ export const HeaderBar: React.FC = () => {
     folderIntelligence,
     isSmartCleanupOpen,
     setSmartCleanupOpen,
+    fontSize,
+    showToast,
   } = useExplorerStore();
 
   const t = (k: keyof TranslationDict) => getTranslation(k, language);
@@ -79,7 +84,7 @@ export const HeaderBar: React.FC = () => {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
-  const [isEditingPath, setIsEditingPath] = useState(false);
+  const [showBreadcrumbs, setShowBreadcrumbs] = useState(false);
   const [pathInput, setPathInput] = useState("");
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -102,12 +107,22 @@ export const HeaderBar: React.FC = () => {
     return "/" + breadcrumbs.map((b) => b.name).join("/");
   };
 
+  const currentPath = getFullPath();
+
+  useEffect(() => {
+    // Keep input synchronized with currentPath when user isn't actively typing
+    if (document.activeElement !== pathInputRef.current) {
+      setPathInput(currentPath);
+    }
+  }, [currentPath]);
+
   const copyCurrentPath = () => {
     const p = getFullPath();
     if (navigator?.clipboard?.writeText) {
       navigator.clipboard.writeText(p);
     }
     setIsCopied(true);
+    showToast(`Copied path: ${p}`);
     setTimeout(() => setIsCopied(false), 2000);
   };
 
@@ -124,13 +139,6 @@ export const HeaderBar: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    if (isEditingPath && pathInputRef.current) {
-      pathInputRef.current.focus();
-      pathInputRef.current.select();
-    }
-  }, [isEditingPath]);
-
   // Keyboard Shortcuts Handler
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -142,8 +150,14 @@ export const HeaderBar: React.FC = () => {
       // Ctrl+L / Cmd+L: Edit Location
       else if ((e.ctrlKey || e.metaKey) && (e.key === "l" || e.key === "L")) {
         e.preventDefault();
+        setShowBreadcrumbs(false);
         setPathInput(getFullPath());
-        setIsEditingPath(true);
+        pathInputRef.current?.focus();
+        pathInputRef.current?.select();
+        setTimeout(() => {
+          pathInputRef.current?.focus();
+          pathInputRef.current?.select();
+        }, 10);
       }
       // Ctrl+F / Cmd+F: Toggle Search
       else if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
@@ -234,28 +248,47 @@ export const HeaderBar: React.FC = () => {
     }
   };
 
-  const handlePathSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handlePathSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     let trimmed = pathInput.trim();
-    if (trimmed) {
-      const userHome =
-        typeof window !== "undefined" && (window as any).__USER_HOME__
-          ? (window as any).__USER_HOME__
-          : "/home/abhi";
-      if (trimmed === "~" || trimmed.startsWith("~/")) {
-        trimmed = userHome + trimmed.slice(1);
-      }
-      if (trimmed.startsWith("/")) {
-        const parts = trimmed.split("/").filter(Boolean);
-        const targetName = parts[parts.length - 1] || "Root";
-        navigateTo(null, trimmed, targetName, true);
-      } else {
-        const parts = trimmed.split("/").filter(Boolean);
-        const targetName = parts[parts.length - 1] || "Root";
-        navigateTo(currentAccountId, null, targetName);
-      }
-      setIsEditingPath(false);
+    if (!trimmed) return;
+
+    const userHome =
+      typeof window !== "undefined" && (window as any).__USER_HOME__
+        ? (window as any).__USER_HOME__
+        : "/home/abhi";
+
+    // Expand ~ and ~/
+    if (trimmed === "~") {
+      trimmed = userHome;
+    } else if (trimmed.startsWith("~/")) {
+      trimmed = userHome + trimmed.slice(1);
+    } else if (!trimmed.startsWith("/") && currentAccountId === null) {
+      // Relative path: resolve against current directory
+      const base = currentFolderId && currentFolderId.startsWith("/") ? currentFolderId : userHome;
+      trimmed = `${base}/${trimmed}`;
     }
+
+    if (trimmed.startsWith("/")) {
+      // Clean duplicate slashes and resolve . and ..
+      const segments = trimmed.split("/").filter(Boolean);
+      const resolvedSegments: string[] = [];
+      for (const seg of segments) {
+        if (seg === "..") {
+          resolvedSegments.pop();
+        } else if (seg !== ".") {
+          resolvedSegments.push(seg);
+        }
+      }
+      const normalizedPath = "/" + resolvedSegments.join("/");
+      const targetName = resolvedSegments[resolvedSegments.length - 1] || "Root";
+      navigateTo(null, normalizedPath, targetName, true);
+    } else {
+      const parts = trimmed.split("/").filter(Boolean);
+      const targetName = parts[parts.length - 1] || "Root";
+      navigateTo(currentAccountId, null, targetName);
+    }
+    pathInputRef.current?.blur();
   };
 
   const sortOptions: Array<{ field: SortField; label: string }> = [
@@ -352,29 +385,73 @@ export const HeaderBar: React.FC = () => {
           <ChevronUp size={16} />
         </button>
 
-        {/* Path Bar / Breadcrumbs / Location Bar */}
-        {isEditingPath ? (
-          <form onSubmit={handlePathSubmit} style={{ display: "flex", flex: 1, minWidth: 0 }}>
+        {/* Path Bar / Location Textbox / Breadcrumbs */}
+        {!showBreadcrumbs ? (
+          <form
+            onSubmit={handlePathSubmit}
+            className="adw-path-container"
+            role="search"
+            aria-label="Directory location"
+          >
+            <div className="adw-path-icon" title="Location icon">
+              {currentAccountId ? <Cloud size={14} /> : <Folder size={14} />}
+            </div>
             <input
               ref={pathInputRef}
               type="text"
-              autoFocus
-              className="adw-crumb"
-              style={{
-                width: "100%",
-                maxWidth: 420,
-                height: 32,
-                border: "1px solid var(--border-color)",
-                background: "var(--card-bg)",
-                padding: "0 8px",
-              }}
+              className="adw-path-input"
+              aria-label="Current directory path"
+              title="Directory path (type and press Enter to navigate, Ctrl+L to focus/select)"
+              style={{ fontSize: fontSize || 13 }}
               value={pathInput}
               onChange={(e) => setPathInput(e.target.value)}
-              onBlur={() => setIsEditingPath(false)}
+              onFocus={(e) => {
+                e.target.select();
+              }}
               onKeyDown={(e) => {
-                if (e.key === "Escape") setIsEditingPath(false);
+                if (e.key === "Escape") {
+                  setPathInput(getFullPath());
+                  pathInputRef.current?.blur();
+                }
               }}
             />
+            <div className="adw-path-actions">
+              <button
+                type="button"
+                className="adw-path-action-btn"
+                title={isCopied ? "Copied!" : "Copy path (Ctrl+C)"}
+                aria-label="Copy path"
+                onClick={(e) => {
+                  e.preventDefault();
+                  copyCurrentPath();
+                }}
+              >
+                {isCopied ? (
+                  <Check size={13} color="var(--state-available)" />
+                ) : (
+                  <Copy size={13} />
+                )}
+              </button>
+
+              <button
+                type="submit"
+                className="adw-path-action-btn"
+                title="Go to path (Enter)"
+                aria-label="Go to path"
+              >
+                <ArrowRight size={13} />
+              </button>
+
+              <button
+                type="button"
+                className="adw-path-action-btn"
+                title="Switch to breadcrumbs view"
+                aria-label="Switch to breadcrumbs view"
+                onClick={() => setShowBreadcrumbs(true)}
+              >
+                <FolderTree size={13} />
+              </button>
+            </div>
           </form>
         ) : (
           <div
@@ -382,14 +459,22 @@ export const HeaderBar: React.FC = () => {
             onClick={(e) => {
               if (e.target === e.currentTarget) {
                 setPathInput(getFullPath());
-                setIsEditingPath(true);
+                setShowBreadcrumbs(false);
+                setTimeout(() => {
+                  pathInputRef.current?.focus();
+                  pathInputRef.current?.select();
+                }, 10);
               }
             }}
             onDoubleClick={() => {
               setPathInput(getFullPath());
-              setIsEditingPath(true);
+              setShowBreadcrumbs(false);
+              setTimeout(() => {
+                pathInputRef.current?.focus();
+                pathInputRef.current?.select();
+              }, 10);
             }}
-            title="Click crumb to navigate, click empty space or Ctrl+L to edit/copy path"
+            title="Click crumb to navigate, double-click or click toggle button to edit/paste path"
           >
             {breadcrumbs.map((crumb, idx) => (
               <React.Fragment key={crumb.id ?? `crumb_${idx}`}>
@@ -406,20 +491,37 @@ export const HeaderBar: React.FC = () => {
               </React.Fragment>
             ))}
 
-            {/* One-Click Copy Path Button */}
-            <button
-              type="button"
-              className="adw-btn adw-btn-icon adw-copy-path-btn"
-              title="Copy location path to clipboard"
-              aria-label="Copy location path"
-              style={{ width: 22, height: 22, padding: 0, border: "none", background: "none", marginLeft: 4 }}
-              onClick={(e) => {
-                e.stopPropagation();
-                copyCurrentPath();
-              }}
-            >
-              {isCopied ? <Check size={12} color="var(--state-available)" /> : <Copy size={12} />}
-            </button>
+            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 2 }}>
+              <button
+                type="button"
+                className="adw-path-action-btn"
+                title={isCopied ? "Copied!" : "Copy path"}
+                aria-label="Copy location path"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  copyCurrentPath();
+                }}
+              >
+                {isCopied ? <Check size={12} color="var(--state-available)" /> : <Copy size={12} />}
+              </button>
+
+              <button
+                type="button"
+                className="adw-path-action-btn"
+                title="Switch to path textbox"
+                aria-label="Switch to path textbox"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowBreadcrumbs(false);
+                  setTimeout(() => {
+                    pathInputRef.current?.focus();
+                    pathInputRef.current?.select();
+                  }, 10);
+                }}
+              >
+                <FolderTree size={12} color="var(--adw-accent-blue)" />
+              </button>
+            </div>
           </div>
         )}
       </div>

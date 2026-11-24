@@ -360,7 +360,7 @@ export const CompressToSizeDialog: React.FC<CompressToSizeDialogProps> = ({
                         : "var(--window-fg)",
                       fontWeight: active ? 600 : 500,
                       fontSize: 12,
-                      cursor: isCompressing ? "not-allowed" : "pointer",
+                      cursor: isCompressing ? "default" : "pointer",
                       transition: "var(--adw-transition)",
                       textAlign: "center",
                       opacity: isPresetLarger && !active ? 0.6 : 1,
@@ -550,7 +550,7 @@ export const CompressToSizeDialog: React.FC<CompressToSizeDialogProps> = ({
                 gap: 6,
                 cursor:
                   isCompressing || !sizeValue || sizeValue <= 0 || isTargetLargerThanCurrent
-                    ? "not-allowed"
+                    ? "default"
                     : "pointer",
                 opacity:
                   isCompressing || !sizeValue || sizeValue <= 0 || isTargetLargerThanCurrent
