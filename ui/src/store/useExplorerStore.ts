@@ -12,6 +12,15 @@ import {
 import { invokeCommand } from "../services/ipc";
 import { LanguageCode } from "../i18n";
 
+export function applyAppFontSize(size: number) {
+  if (typeof document !== "undefined") {
+    const clamped = Math.max(10, Math.min(24, size));
+    const scale = clamped / 14;
+    document.documentElement.style.setProperty("--app-font-size", `${clamped}px`);
+    document.documentElement.style.setProperty("--app-font-scale", scale.toFixed(3));
+  }
+}
+
 if (typeof document !== "undefined") {
   try {
     const savedTheme = localStorage.getItem("ar_files_theme");
@@ -19,6 +28,11 @@ if (typeof document !== "undefined") {
       document.documentElement.setAttribute("data-theme", "light");
     } else if (savedTheme === "dark") {
       document.documentElement.setAttribute("data-theme", "dark");
+    }
+
+    const savedFontSize = parseInt(localStorage.getItem("ar_files_font_size") || "14", 10);
+    if (!isNaN(savedFontSize)) {
+      applyAppFontSize(savedFontSize);
     }
   } catch {}
 }
@@ -107,9 +121,11 @@ interface ExplorerState {
   unmountAccountVfs: (accountId: string) => Promise<void>;
   loadAccountMountPaths: () => Promise<void>;
 
-  // Appearance Theme
+  // Appearance Theme & Font Size
   theme: "system" | "light" | "dark";
   setTheme: (theme: "system" | "light" | "dark") => void;
+  fontSize: number;
+  setFontSize: (size: number) => void;
 
   // i18n
   language: LanguageCode;
@@ -231,6 +247,12 @@ interface ExplorerState {
   moveItems: (entryIds: string[], targetParentId: string | null) => Promise<void>;
   copyItems: (entryIds: string[], targetParentId: string | null, collision?: "replace" | "skip" | "keep_both") => Promise<void>;
   compressItems: (sourcePaths: string[], outputPath: string) => Promise<void>;
+  compressFileToSize: (
+    sourcePath: string,
+    targetBytes: number,
+    formattedSize: string,
+    outputPath?: string
+  ) => Promise<{ output_path: string; original_size: number; compressed_size: number }>;
   extractArchive: (archivePath: string, destinationDir: string) => Promise<void>;
 }
 
@@ -358,6 +380,20 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
       }
     } catch {}
     set({ theme });
+  },
+  fontSize:
+    (typeof window !== "undefined" &&
+      parseInt(localStorage.getItem("ar_files_font_size") || "14", 10)) ||
+    14,
+  setFontSize: (size: number) => {
+    try {
+      const clamped = Math.max(10, Math.min(24, size));
+      localStorage.setItem("ar_files_font_size", clamped.toString());
+      applyAppFontSize(clamped);
+      set({ fontSize: clamped });
+    } catch {
+      set({ fontSize: size });
+    }
   },
   language: (typeof window !== "undefined" && (localStorage.getItem("ar_files_language") as LanguageCode)) || "en",
   setLanguage: (language: LanguageCode) => {
@@ -1837,6 +1873,26 @@ export const useExplorerStore = create<ExplorerState>((set, get) => ({
       await get().loadEntries();
     } catch (err) {
       console.error("Compress failed", err);
+    }
+  },
+
+  compressFileToSize: async (sourcePath, targetBytes, formattedSize, outputPath) => {
+    try {
+      const res = await invokeCommand<{
+        output_path: string;
+        original_size: number;
+        compressed_size: number;
+      }>("compress_to_size", {
+        source_path: sourcePath,
+        target_bytes: targetBytes,
+        formatted_size: formattedSize,
+        output_path: outputPath,
+      });
+      await get().loadEntries();
+      return res;
+    } catch (err: any) {
+      console.error("Compress to size failed", err);
+      throw err;
     }
   },
 

@@ -22,6 +22,7 @@ import {
   Sparkles,
   CheckSquare,
   RefreshCw,
+  FileDown,
 } from "lucide-react";
 import { EntryRecord } from "../types";
 import { useExplorerStore } from "../store/useExplorerStore";
@@ -36,6 +37,7 @@ interface ContextMenuProps {
   onStartRename: (entry: EntryRecord) => void;
   onBatchRename?: () => void;
   onCompress?: () => void;
+  onCompressToSize?: (entry: EntryRecord) => void;
   onExtract?: () => void;
   onDeletePermanently?: (ids?: string[]) => void;
   onOpenWith?: (entry: EntryRecord) => void;
@@ -50,6 +52,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onStartRename,
   onBatchRename,
   onCompress,
+  onCompressToSize,
   onExtract,
   onDeletePermanently,
   onOpenWith,
@@ -315,6 +318,13 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     entry.name.endsWith(".tar.gz") ||
     entry.mime_type.includes("zip") ||
     entry.mime_type.includes("tar");
+
+  const isImageOrPdf =
+    !entry.is_directory &&
+    (entry.name.toLowerCase().endsWith(".pdf") ||
+      entry.mime_type?.toLowerCase().includes("pdf") ||
+      entry.mime_type?.toLowerCase().startsWith("image/") ||
+      /\.(jpe?g|png|webp|bmp|gif|tiff?|avif)$/i.test(entry.name));
 
   const handleOpen = () => {
     openItem(entry);
@@ -669,6 +679,26 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         )}
 
         {/* Compression & Extraction */}
+        {isImageOrPdf && onCompressToSize && (
+          <button
+            role="menuitem"
+            className="adw-sidebar-item"
+            style={{
+              borderRadius: 0,
+              border: "none",
+              background: "none",
+              width: "100%",
+            }}
+            onClick={() => {
+              onCompressToSize(entry);
+              onClose();
+            }}
+          >
+            <FileDown size={15} color="var(--adw-accent-blue)" />
+            <span>Compress to Desired Size...</span>
+          </button>
+        )}
+
         {isArchive && onExtract && (
           <button
             role="menuitem"

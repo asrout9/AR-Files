@@ -5,6 +5,9 @@ AR Files - Desktop File Manager for Fedora Workstation (GNOME / Libadwaita)
 
 import sys
 import os
+import shutil
+import tempfile
+import io
 import json
 import mimetypes
 import subprocess
@@ -1722,6 +1725,91 @@ class ARFilesApplication(Adw.Application):
                 }
             }
 
+        elif cmd == "compress_to_size":
+            source_path = args.get("source_path") or args.get("path")
+            if source_path and str(source_path).startswith("file://"):
+                from urllib.parse import unquote
+                source_path = unquote(str(source_path)[7:])
+            source_path = os.path.expanduser(source_path) if source_path else ""
+
+            if not source_path or not os.path.exists(source_path):
+                hydrate_resp = self.send_backend_ipc("hydrate_entry", {"entry_id": source_path})
+                if hydrate_resp and hydrate_resp.get("success") and hydrate_resp.get("data"):
+                    cached = hydrate_resp.get("data")
+                    if os.path.exists(cached):
+                        source_path = cached
+
+            if not source_path or not os.path.exists(source_path):
+                return {"success": False, "error": f"File '{source_path}' does not exist"}
+
+            target_bytes = int(args.get("target_bytes") or 0)
+            if target_bytes <= 0:
+                return {"success": False, "error": "Target size must be greater than 0 bytes"}
+
+            formatted_size = args.get("formatted_size") or "compressed"
+            custom_output_path = args.get("output_path")
+
+            if custom_output_path:
+                out_path = custom_output_path
+            else:
+                dirname = os.path.dirname(source_path)
+                basename = os.path.basename(source_path)
+                dot_idx = basename.rfind('.')
+                if dot_idx > 0:
+                    stem = basename[:dot_idx]
+                    ext = basename[dot_idx:]
+                else:
+                    stem = basename
+                    ext = ""
+                clean_size = str(formatted_size).replace(" ", "")
+                cand_name = f"{stem}_compressed_{clean_size}{ext}"
+                cand_path = os.path.join(dirname, cand_name)
+                counter = 1
+                while os.path.exists(cand_path):
+                    cand_name = f"{stem}_compressed_{clean_size} ({counter}){ext}"
+                    cand_path = os.path.join(dirname, cand_name)
+                    counter += 1
+                out_path = cand_path
+
+            res = self.perform_compress_to_size(source_path, target_bytes, out_path)
+            if isinstance(res, dict) and res.get("success"):
+                data = {
+                    "output_path": res.get("output_path"),
+                    "original_size": res.get("original_size"),
+                    "compressed_size": res.get("compressed_size"),
+                }
+                res["data"] = data
+            return res
+
+        elif cmd == "compress_entries":
+            source_paths = args.get("source_paths") or []
+            output_path = args.get("output_path") or ""
+            if not source_paths or not output_path:
+                return {"success": False, "error": "Missing source_paths or output_path"}
+            try:
+                os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+                if output_path.endswith(".zip"):
+                    import zipfile
+                    with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                        for sp in source_paths:
+                            if os.path.isdir(sp):
+                                for root, _, files in os.walk(sp):
+                                    for f in files:
+                                        full = os.path.join(root, f)
+                                        rel = os.path.relpath(full, os.path.dirname(sp))
+                                        zf.write(full, rel)
+                            elif os.path.exists(sp):
+                                zf.write(sp, os.path.basename(sp))
+                else:
+                    import tarfile
+                    with tarfile.open(output_path, "w:gz") as tf:
+                        for sp in source_paths:
+                            if os.path.exists(sp):
+                                tf.add(sp, arcname=os.path.basename(sp))
+                return {"success": True}
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+
         # All cloud operations are dispatched directly to the Rust backend daemon
         backend_cmds = {
             "list_accounts",
@@ -1746,12 +1834,252 @@ class ARFilesApplication(Adw.Application):
             "get_account_mount_path",
             "list_active_mounts",
             "get_cloud_thumbnail",
+            "compress_to_size",
+            "compress_entries",
         }
 
         if cmd in backend_cmds:
             return self.send_backend_ipc(cmd, args)
 
         return {"unhandled": True}
+
+    def perform_compress_to_size(self, source_path, target_bytes, output_path):
+        try:
+            if not os.path.exists(source_path):
+                return {"success": False, "error": f"Source file does not exist: {source_path}"}
+            orig_size = os.path.getsize(source_path)
+            if target_bytes <= 0:
+                return {"success": False, "error": "Target size must be greater than 0"}
+
+            # If original is already <= target_bytes
+            if orig_size <= target_bytes:
+                shutil.copyfile(source_path, output_path)
+                return {
+                    "success": True,
+                    "output_path": output_path,
+                    "original_size": orig_size,
+                    "compressed_size": orig_size
+                }
+
+            ext = os.path.splitext(source_path)[1].lower()
+            is_pdf = ext == ".pdf"
+            is_image = ext in ('.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tiff', '.tif', '.avif')
+
+            if not is_pdf and not is_image:
+                return {
+                    "success": False,
+                    "error": f"File extension '{ext}' is not supported. Only images and PDFs can be compressed to size."
+                }
+
+            # Ensure parent output directory exists
+            os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+
+            if is_pdf:
+                # 1. Ghostscript passes
+                gs_profiles = [
+                    ('/printer', 200),
+                    ('/ebook', 150),
+                    ('/screen', 120),
+                    ('/screen', 90),
+                    ('/screen', 72),
+                    ('/screen', 50),
+                    ('/screen', 36),
+                ]
+                with tempfile.TemporaryDirectory() as td:
+                    for idx, (setting, dpi) in enumerate(gs_profiles):
+                        cand = os.path.join(td, f"gs_out_{idx}.pdf")
+                        cmd = [
+                            'gs',
+                            '-sDEVICE=pdfwrite',
+                            '-dCompatibilityLevel=1.4',
+                            f'-dPDFSETTINGS={setting}',
+                            '-dNOPAUSE',
+                            '-dQUIET',
+                            '-dBATCH',
+                            '-dDownsampleColorImages=true',
+                            '-dColorImageDownsampleType=/Bicubic',
+                            f'-dColorImageResolution={dpi}',
+                            '-dDownsampleGrayImages=true',
+                            '-dGrayImageDownsampleType=/Bicubic',
+                            f'-dGrayImageResolution={dpi}',
+                            '-dDownsampleMonoImages=true',
+                            '-dMonoImageDownsampleType=/Bicubic',
+                            f'-dMonoImageResolution={dpi}',
+                            f'-sOutputFile={cand}',
+                            source_path
+                        ]
+                        try:
+                            res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=25)
+                            if res.returncode == 0 and os.path.exists(cand):
+                                sz = os.path.getsize(cand)
+                                if sz <= target_bytes:
+                                    shutil.copyfile(cand, output_path)
+                                    return {
+                                        "success": True,
+                                        "output_path": output_path,
+                                        "original_size": orig_size,
+                                        "compressed_size": sz
+                                    }
+                        except Exception:
+                            continue
+
+                    # 2. Raster PDF fallback via pdftoppm + PIL
+                    for dpi in [100, 72, 60, 48, 36]:
+                        for q in [65, 45, 30, 20]:
+                            prefix = os.path.join(td, f"p_{dpi}_{q}")
+                            try:
+                                subprocess.run(['pdftoppm', '-r', str(dpi), '-jpeg', '-jpegopt', f'quality={q}', source_path, prefix],
+                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20, check=True)
+                                pages = sorted([os.path.join(td, f) for f in os.listdir(td) if f.startswith(f"p_{dpi}_{q}-") and f.endswith('.jpg')])
+                                if not pages:
+                                    continue
+                                from PIL import Image
+                                imgs = [Image.open(p).convert('RGB') for p in pages]
+                                tmp_pdf = os.path.join(td, f"assembled_{dpi}_{q}.pdf")
+                                imgs[0].save(tmp_pdf, 'PDF', resolution=float(dpi), save_all=True, append_images=imgs[1:])
+                                sz = os.path.getsize(tmp_pdf)
+                                if sz <= target_bytes:
+                                    shutil.copyfile(tmp_pdf, output_path)
+                                    return {
+                                        "success": True,
+                                        "output_path": output_path,
+                                        "original_size": orig_size,
+                                        "compressed_size": sz
+                                    }
+                            except Exception:
+                                continue
+
+            elif is_image:
+                # Try ImageMagick if jpeg or webp
+                with tempfile.TemporaryDirectory() as td:
+                    if ext in ('.jpg', '.jpeg'):
+                        cand = os.path.join(td, "im_out.jpg")
+                        try:
+                            cmd = ['magick', source_path, '-define', f'jpeg:extent={target_bytes}b', cand]
+                            res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+                            if res.returncode == 0 and os.path.exists(cand):
+                                sz = os.path.getsize(cand)
+                                if sz <= target_bytes:
+                                    shutil.copyfile(cand, output_path)
+                                    return {
+                                        "success": True,
+                                        "output_path": output_path,
+                                        "original_size": orig_size,
+                                        "compressed_size": sz
+                                    }
+                        except Exception:
+                            pass
+                    elif ext == '.webp':
+                        cand = os.path.join(td, "im_out.webp")
+                        try:
+                            cmd = ['magick', source_path, '-define', f'webp:target-size={target_bytes}', cand]
+                            res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+                            if res.returncode == 0 and os.path.exists(cand):
+                                sz = os.path.getsize(cand)
+                                if sz <= target_bytes:
+                                    shutil.copyfile(cand, output_path)
+                                    return {
+                                        "success": True,
+                                        "output_path": output_path,
+                                        "original_size": orig_size,
+                                        "compressed_size": sz
+                                    }
+                        except Exception:
+                            pass
+
+                # PIL Pillow binary search
+                try:
+                    from PIL import Image
+                    im = Image.open(source_path)
+                    fmt = im.format or ('JPEG' if ext in ('.jpg', '.jpeg') else ext.lstrip('.').upper())
+                    is_png = (fmt.upper() == 'PNG' or ext == '.png')
+                    scale = 1.0
+
+                    for attempt in range(12):
+                        cur_w = max(16, int(im.width * scale))
+                        cur_h = max(16, int(im.height * scale))
+                        resized = im.resize((cur_w, cur_h), Image.Resampling.LANCZOS) if scale < 0.999 else im.copy()
+
+                        if is_png:
+                            buf = io.BytesIO()
+                            resized.save(buf, format='PNG', optimize=True)
+                            if buf.tell() <= target_bytes:
+                                with open(output_path, 'wb') as f:
+                                    f.write(buf.getvalue())
+                                return {
+                                    "success": True,
+                                    "output_path": output_path,
+                                    "original_size": orig_size,
+                                    "compressed_size": buf.tell()
+                                }
+                            for colors in [256, 128, 64, 32]:
+                                try:
+                                    q_im = resized.quantize(colors=colors)
+                                    buf = io.BytesIO()
+                                    q_im.save(buf, format='PNG', optimize=True)
+                                    if buf.tell() <= target_bytes:
+                                        with open(output_path, 'wb') as f:
+                                            f.write(buf.getvalue())
+                                        return {
+                                            "success": True,
+                                            "output_path": output_path,
+                                            "original_size": orig_size,
+                                            "compressed_size": buf.tell()
+                                        }
+                                except Exception:
+                                    continue
+                        else:
+                            low_q = 5
+                            high_q = 95
+                            best_buf = None
+                            work_im = resized
+                            if fmt.upper() in ('JPEG', 'JPG') and work_im.mode in ('RGBA', 'P', 'LA'):
+                                work_im = work_im.convert('RGB')
+
+                            while low_q <= high_q:
+                                mid_q = (low_q + high_q) // 2
+                                buf = io.BytesIO()
+                                work_im.save(buf, format=fmt, quality=mid_q, optimize=True)
+                                sz = buf.tell()
+                                if sz <= target_bytes:
+                                    best_buf = buf.getvalue()
+                                    low_q = mid_q + 1
+                                else:
+                                    high_q = mid_q - 1
+
+                            if best_buf is not None:
+                                with open(output_path, 'wb') as f:
+                                    f.write(best_buf)
+                                return {
+                                    "success": True,
+                                    "output_path": output_path,
+                                    "original_size": orig_size,
+                                    "compressed_size": len(best_buf)
+                                }
+
+                        scale *= 0.8
+                except Exception as ex:
+                    return {"success": False, "error": f"Image compression error: {ex}"}
+
+            if not os.path.exists(output_path):
+                return {"success": False, "error": f"Could not compress file to within {target_bytes} bytes"}
+
+            fin_sz = os.path.getsize(output_path)
+            if fin_sz > target_bytes:
+                try:
+                    os.remove(output_path)
+                except Exception:
+                    pass
+                return {"success": False, "error": f"Resulting size ({fin_sz} bytes) exceeded target size ({target_bytes} bytes)"}
+
+            return {
+                "success": True,
+                "output_path": output_path,
+                "original_size": orig_size,
+                "compressed_size": fin_sz
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     def do_shutdown(self):
         if self.backend_proc and self.backend_proc.poll() is None:

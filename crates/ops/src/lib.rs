@@ -1,11 +1,13 @@
 pub mod archive;
 pub mod batch_rename;
+pub mod compress;
 pub mod engine;
 pub mod types;
 pub mod undo;
 
 pub use archive::ArchiveManager;
 pub use batch_rename::{BatchRenamePreview, BatchRenameRule, NumberSequenceRule};
+pub use compress::{CompressManager, CompressionResult};
 pub use engine::OperationsManager;
 pub use types::{CollisionResolution, OperationProgress};
 pub use undo::{UndoAction, UndoRedoStack};

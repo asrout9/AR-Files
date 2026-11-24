@@ -2,6 +2,8 @@
 :root {
   --adw-font-sans: system-ui, -apple-system, "Cantarell", "Adwaita Sans", "Ubuntu", sans-serif;
   --adw-font-mono: "Source Code Pro", "Liberation Mono", monospace;
+  --app-font-size: 14px;
+  --app-font-scale: 1;
 
   /* Sizing and Radii */
   --adw-radius-s: 6px;
@@ -113,7 +115,7 @@
 
 body {
   font-family: var(--adw-font-sans);
-  font-size: 14px;
+  font-size: var(--app-font-size, 14px);
   line-height: 1.4;
   color: var(--window-fg);
   background-color: var(--window-bg);
@@ -294,6 +296,13 @@ body {
 
 .adw-btn:hover {
   background-color: var(--hover-bg);
+}
+
+.adw-btn:disabled,
+.adw-btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .adw-btn-icon {

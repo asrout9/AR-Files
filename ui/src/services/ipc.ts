@@ -20,6 +20,9 @@ export async function invokeCommand<T>(cmd: string, args: Record<string, unknown
     const res = await webkit.messageHandlers.ar_ipc.postMessage(JSON.stringify({ cmd, args }));
     const parsed = typeof res === "string" ? JSON.parse(res) : res;
     if (parsed) {
+      if (parsed.unhandled) {
+        throw new Error(parsed.error || `Command "${cmd}" is not handled by the host`);
+      }
       if (parsed.success === false) {
         throw new Error(parsed.error || "Operation failed");
       }
@@ -727,6 +730,38 @@ async function handleMockCommand<T>(cmd: string, args: Record<string, unknown>):
     }
 
     case "finish_picker_operation": {
+      return { success: true } as unknown as T;
+    }
+
+    case "compress_to_size": {
+      const src = (args.source_path as string) || (args.path as string) || "sample.jpg";
+      const targetBytes = (args.target_bytes as number) || 102400;
+      const formattedSize = (args.formatted_size as string) || "100KB";
+      const customOut = args.output_path as string | undefined;
+
+      let outPath = customOut;
+      if (!outPath) {
+        const lastSlash = src.lastIndexOf("/");
+        const dir = lastSlash >= 0 ? src.substring(0, lastSlash) : "";
+        const filename = lastSlash >= 0 ? src.substring(lastSlash + 1) : src;
+        const dot = filename.lastIndexOf(".");
+        const stem = dot > 0 ? filename.substring(0, dot) : filename;
+        const ext = dot > 0 ? filename.substring(dot) : "";
+        const cleanSize = formattedSize.replace(/\s+/g, "");
+        const outName = `${stem}_compressed_${cleanSize}${ext}`;
+        outPath = dir ? `${dir}/${outName}` : outName;
+      }
+
+      const compressedSize = Math.min(targetBytes, Math.max(1024, Math.floor(targetBytes * 0.92)));
+      return {
+        success: true,
+        output_path: outPath,
+        original_size: targetBytes * 2,
+        compressed_size: compressedSize,
+      } as unknown as T;
+    }
+
+    case "compress_entries": {
       return { success: true } as unknown as T;
     }
 

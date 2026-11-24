@@ -296,6 +296,20 @@ pub async fn compress_entries(source_paths: Vec<String>, output_path: String) ->
     }
 }
 
+pub async fn compress_to_size(
+    source_path: String,
+    target_bytes: u64,
+    formatted_size: String,
+    custom_output_path: Option<String>,
+) -> Result<cirrus_ops::CompressionResult> {
+    let src = std::path::Path::new(&source_path);
+    let out = match custom_output_path {
+        Some(ref p) if !p.is_empty() => std::path::PathBuf::from(p),
+        _ => cirrus_ops::CompressManager::generate_compressed_filename(src, &formatted_size),
+    };
+    cirrus_ops::CompressManager::compress_to_size(src, target_bytes, &out).await
+}
+
 pub async fn extract_archive(archive_path: String, destination_dir: String) -> Result<()> {
     let arch = std::path::Path::new(&archive_path);
     let dest = std::path::Path::new(&destination_dir);

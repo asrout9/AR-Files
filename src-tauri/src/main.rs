@@ -298,6 +298,48 @@ async fn handle_ipc_command(
                 Err(e) => serde_json::json!({ "success": false, "error": e.to_string() }),
             }
         }
+        "compress_entries" => {
+            let source_paths: Vec<String> = serde_json::from_value(
+                args.get("source_paths")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Array(Vec::new())),
+            )
+            .unwrap_or_default();
+            let output_path = args
+                .get("output_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            match commands::compress_entries(source_paths, output_path).await {
+                Ok(_) => serde_json::json!({ "success": true }),
+                Err(e) => serde_json::json!({ "success": false, "error": e.to_string() }),
+            }
+        }
+        "compress_to_size" => {
+            let source_path = args
+                .get("source_path")
+                .or_else(|| args.get("path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let target_bytes = args
+                .get("target_bytes")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let formatted_size = args
+                .get("formatted_size")
+                .and_then(|v| v.as_str())
+                .unwrap_or("compressed")
+                .to_string();
+            let custom_output_path = args
+                .get("output_path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            match commands::compress_to_size(source_path, target_bytes, formatted_size, custom_output_path).await {
+                Ok(res) => serde_json::json!({ "success": true, "data": res }),
+                Err(e) => serde_json::json!({ "success": false, "error": e.to_string() }),
+            }
+        }
         "get_cloud_thumbnail" => {
             match serde_json::from_value::<commands::CloudThumbnailParams>(args) {
                 Ok(params) => match commands::get_cloud_thumbnail(state, params).await {

@@ -13,6 +13,7 @@ import {
   Sun,
   Moon,
   Monitor,
+  Type,
 } from "lucide-react";
 import { useExplorerStore } from "../store/useExplorerStore";
 import { getTranslation, LanguageCode, TranslationDict } from "../i18n";
@@ -45,6 +46,8 @@ export const PreferencesDialog: React.FC = () => {
     removeAccount,
     language,
     setLanguage,
+    fontSize,
+    setFontSize,
   } = useExplorerStore();
 
   const t = (k: keyof TranslationDict) => getTranslation(k, language);
@@ -481,6 +484,116 @@ export const PreferencesDialog: React.FC = () => {
                             </div>
                           </>
                         )}
+                      </div>
+                    </div>
+
+                    {/* App-Wide Font Size Adjuster */}
+                    <div style={{ borderTop: "1px solid var(--border-color)", paddingTop: 14 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <Type size={16} color="var(--adw-accent-blue)" />
+                          <div>
+                            <div style={{ fontWeight: 500 }}>App Font Size</div>
+                            <div style={{ fontSize: 12, color: "var(--dim-fg)" }}>
+                              Adjust text size across the entire file manager ({fontSize}px / {Math.round((fontSize / 14) * 100)}%)
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Stepper buttons (- / + / reset) */}
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <button
+                            type="button"
+                            className="adw-btn"
+                            onClick={() => setFontSize(Math.max(10, fontSize - 1))}
+                            disabled={fontSize <= 10}
+                            style={{ padding: "4px 10px", fontWeight: 700 }}
+                            title="Decrease Font Size"
+                            aria-label="Decrease Font Size"
+                          >
+                            A-
+                          </button>
+                          <span
+                            style={{
+                              fontSize: 13,
+                              fontWeight: 600,
+                              minWidth: 42,
+                              textAlign: "center",
+                            }}
+                          >
+                            {fontSize}px
+                          </span>
+                          <button
+                            type="button"
+                            className="adw-btn"
+                            onClick={() => setFontSize(Math.min(22, fontSize + 1))}
+                            disabled={fontSize >= 22}
+                            style={{ padding: "4px 10px", fontWeight: 700 }}
+                            title="Increase Font Size"
+                            aria-label="Increase Font Size"
+                          >
+                            A+
+                          </button>
+                          {fontSize !== 14 && (
+                            <button
+                              type="button"
+                              className="adw-btn"
+                              onClick={() => setFontSize(14)}
+                              style={{ fontSize: 12, padding: "4px 8px" }}
+                              title="Reset to Default (14px)"
+                            >
+                              Reset
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Quick Font Presets */}
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, marginBottom: 12 }}>
+                        {[
+                          { label: "Small", size: 12 },
+                          { label: "Default", size: 14 },
+                          { label: "Large", size: 16 },
+                          { label: "Extra Large", size: 18 },
+                        ].map((preset) => {
+                          const active = fontSize === preset.size;
+                          return (
+                            <button
+                              key={preset.label}
+                              type="button"
+                              onClick={() => setFontSize(preset.size)}
+                              className={`adw-btn ${active ? "adw-btn-accent" : ""}`}
+                              style={{
+                                padding: "6px 8px",
+                                fontSize: 12,
+                                justifyContent: "center",
+                                fontWeight: active ? 600 : 500,
+                              }}
+                            >
+                              {preset.label} ({preset.size}px)
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Live Text Preview Box */}
+                      <div
+                        style={{
+                          padding: "10px 14px",
+                          backgroundColor: "var(--view-bg)",
+                          borderRadius: "var(--adw-radius-s)",
+                          border: "1px dashed var(--border-color)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                        }}
+                      >
+                        <span style={{ fontSize: `${fontSize}px`, color: "var(--window-fg)", lineHeight: 1.4 }}>
+                          The quick brown fox jumps over the lazy dog.
+                        </span>
+                        <span style={{ fontSize: 11, color: "var(--dim-fg)", marginLeft: 12, flexShrink: 0 }}>
+                          Live Preview
+                        </span>
                       </div>
                     </div>
                   </div>

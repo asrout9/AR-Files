@@ -19,6 +19,7 @@ import { ReauthDialog } from "./components/ReauthDialog";
 import { PreviewPane } from "./components/PreviewPane";
 import { OpenWithModal } from "./components/OpenWithModal";
 import { SmartCleanupDialog } from "./components/SmartCleanupDialog";
+import { CompressToSizeDialog } from "./components/CompressToSizeDialog";
 import { Sparkles, X } from "lucide-react";
 import { formatLocalizedFileSize } from "./i18n";
 import { invokeCommand } from "./services/ipc";
@@ -92,6 +93,7 @@ export const App: React.FC = () => {
 
   const [propertiesEntry, setPropertiesEntry] = useState<EntryRecord | null>(null);
   const [openWithEntry, setOpenWithEntry] = useState<EntryRecord | null>(null);
+  const [compressToSizeEntry, setCompressToSizeEntry] = useState<EntryRecord | null>(null);
   const [renamingEntry, setRenamingEntry] = useState<EntryRecord | null>(null);
   const [newName, setNewName] = useState("");
   const [isBatchRenameOpen, setIsBatchRenameOpen] = useState(false);
@@ -670,6 +672,7 @@ export const App: React.FC = () => {
           }}
           onBatchRename={() => setIsBatchRenameOpen(true)}
           onCompress={handleCompress}
+          onCompressToSize={(entry) => setCompressToSizeEntry(entry)}
           onExtract={() => contextMenuTarget.entry && handleExtract(contextMenuTarget.entry)}
           onDeletePermanently={async (ids?: string[]) => {
             const count = ids?.length || selectedIds.size || 1;
@@ -677,6 +680,17 @@ export const App: React.FC = () => {
             showToast(`Permanently deleted ${count} item${count > 1 ? "s" : ""}`);
           }}
           onOpenWith={(entry) => setOpenWithEntry(entry)}
+        />
+      )}
+
+      {/* Compress to Desired Size Modal */}
+      {compressToSizeEntry && (
+        <CompressToSizeDialog
+          entry={compressToSizeEntry}
+          onClose={() => setCompressToSizeEntry(null)}
+          onSuccess={() => {
+            loadEntries();
+          }}
         />
       )}
 
